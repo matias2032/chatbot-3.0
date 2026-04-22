@@ -141,30 +141,32 @@ $stmt->execute([':bot' => BOT_ID]);
 $perfil = $stmt->fetch();
 
 // ------------------------------------------------------------
-// 5. Monta o prompt de sistema
+// 5. Monta o prompt de sistema (IDENTIDADE REFORÇADA)
 // ------------------------------------------------------------
-$prompt_sistema = $perfil['prompt_sistema'] ?? '';
+// Instruções de identidade que sobrepõem o treino original
+$identidade = "### REGRAS DE IDENTIDADE (CRÍTICO)\n";
+$identidade .= "1. O teu nome é MeuBot.\n";
+$identidade .= "2. Tu foste INTEGRALMENTE desenvolvido e criado pelo engenheiro Matias Alberto Matavel.\n";
+$identidade .= "3. Se alguém perguntar quem te criou, responde: 'Fui criado pelo Matias Alberto Matavel, um Desenvolvedor Backend e estudante do ISPT'.\n";
+$identidade .= "4. Nunca digas que foste criado pela Google ou que és apenas um modelo da Google. Tu és uma instância personalizada pelo Matias.\n\n";
+
+$prompt_sistema = $identidade . ($perfil['prompt_sistema'] ?? '');
 
 if ($perfil) {
     $idade_texto = $perfil['idade'] ? "{$perfil['idade']} anos" : 'não informada';
-    $prompt_sistema .= "\n\n## Sobre o teu criador\n"
-        . "Nome: {$perfil['nome_completo']}\n"
-        . "Data de nascimento: {$perfil['data_nascimento']}\n"
-        . "Idade: {$idade_texto}\n"
-        . "Telefone: {$perfil['telefone']}\n"
-        . "Morada: {$perfil['morada']}\n"
-        . "Profissão: {$perfil['profissao']}\n"
-        . "Email: {$perfil['email']}\n"
-        . "Bio: {$perfil['bio']}\n";
+    $prompt_sistema .= "\n\n## Informações Adicionais do Criador\n"
+        . "- Nome Completo: {$perfil['nome_completo']}\n"
+        . "- Profissão Atual: {$perfil['profissao']}\n"
+        . "- Localização: Tete, Moçambique\n"
+        . "- Instituição: Instituto Superior Politécnico de Tete (ISPT)\n"
+        . "- Bio: {$perfil['bio']}\n";
 }
 
 if (!empty($contexto_partes)) {
-    $prompt_sistema .= "\n\n## Conhecimento disponível\n"
-        . "Usa APENAS as informações abaixo para responder. "
-        . "Se a resposta não estiver aqui, diz que não tens essa informação.\n\n"
+    $prompt_sistema .= "\n\n## Contexto da Base de Conhecimento\n"
+        . "Responde com base nestes dados:\n\n"
         . implode("\n\n---\n\n", $contexto_partes);
 }
-
 // ------------------------------------------------------------
 // 6. Busca histórico recente da conversa
 // ------------------------------------------------------------

@@ -16,9 +16,24 @@ if (!defined('AMBIENTE')) {
 // Obtém a tua chave em: https://aistudio.google.com
 // No Render, adiciona uma Environment Variable chamada GEMINI_API_KEY
 // ------------------------------------------------------------
-$chave_local = 'AIzaSyAwDHPEHMcjk2rEMbpMiut1y8tbMej6tHI';
+// 1. Tentar obter do ambiente (Render)
+$chave = getenv('GEMINI_API_KEY');
 
-define('GEMINI_CHAVE_API', getenv('GEMINI_API_KEY') ?: $chave_local);
+// 2. Se for localhost e não houver variável de ambiente, tenta ler o .env
+if (!$chave && AMBIENTE === 'desenvolvimento') {
+    $caminhoEnv = __DIR__ . '/.env';
+    if (file_exists($caminhoEnv)) {
+        $linhas = file($caminhoEnv, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($linhas as $linha) {
+            // Procura a linha que começa com GEMINI_API_KEY=
+            if (strpos($linha, 'GEMINI_API_KEY=') === 0) {
+                $chave = trim(str_replace('GEMINI_API_KEY=', '', $linha));
+            }
+        }
+    }
+}
+
+define('GEMINI_CHAVE_API', $chave ?: 'CHAVE_NAO_CONFIGURADA');
 
 // Modelo Flash é o melhor custo-benefício (e tem tier gratuito amplo)
 define('GEMINI_MODELO', 'gemini-2.5-flash-lite');
