@@ -256,22 +256,47 @@ function limparTexto(string $t): string {
 }
 
 function criarFragmentos(PDO $pdo, string $id_doc, string $texto): int {
+    // --- CORREÇÃO 1: Limpeza profunda antes de processar ---
+    // Garante que o texto está em UTF-8 puro e sem caracteres nulos (chr 0)
+    $texto = mb_convert_encoding($texto, 'UTF-8', 'UTF-8');
+    $texto = str_replace(chr(0), '', $texto);
+
     $tam = CHUNK_TAMANHO;
     $sob = min(CHUNK_SOBREPOSICAO, (int)($tam / 2));
     $len = mb_strlen($texto);
-    $pos = 0; $frags = [];
+    $pos = 0; 
+    $frags = [];
+
     while ($pos < $len) {
         $f = mb_substr($texto, $pos, $tam);
-        if (trim($f) !== '') $frags[] = $f;
+        if (trim($f) !== '') {
+            $frags[] = $f;
+        }
         $pos += ($tam - $sob);
     }
+
+    // --- CORREÇÃO 2: Preparação do Statement ---
     $stmt = $pdo->prepare("
-        INSERT INTO fragmentos_documento (id_documento,indice_fragmento,conteudo,total_tokens)
-        VALUES (:doc,:i,:c,:t)
-        ON CONFLICT (id_documento,indice_fragmento) DO UPDATE SET conteudo=EXCLUDED.conteudo
+        INSERT INTO fragmentos_documento (id_documento, indice_fragmento, conteudo, total_tokens)
+        VALUES (:doc, :i, :c, :t)
+        ON CONFLICT (id_documento, indice_fragmento) 
+        DO UPDATE SET conteudo = EXCLUDED.conteudo
     ");
+
+    $inseridos = 0;
     foreach ($frags as $i => $f) {
-        $stmt->execute([':doc'=>$id_doc,':i'=>$i,':c'=>$f,':t'=>(int)(mb_strlen($f)/4)]);
+        // Limpeza final de cada fragmento para o Postgres não rejeitar
+        $f_limpo = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $f);
+        
+        $sucesso = $stmt->execute([
+            ':doc' => $id_doc,
+            ':i'   => $i,
+            ':c'   => $f_limpo,
+            ':t'   => (int)(mb_strlen($f_limpo) / 4)
+        ]);
+        
+        if ($sucesso) $inseridos++;
     }
-    return count($frags);
+
+    return $inseridos;
 }

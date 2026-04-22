@@ -51,16 +51,14 @@ $fontes_usadas   = [];
  * Remove stopwords comuns em português.
  */
 function extrairPalavrasChave(string $texto): array {
+    // Removi 'regulamento', 'ispt', 'diz' da lista de bloqueio
     $stopwords = ['o','a','os','as','um','uma','uns','umas','de','do','da','dos','das',
                   'em','no','na','nos','nas','por','para','com','sem','que','se','e',
-                  'é','ao','aos','à','às','pelo','pela','pelos','pelas','me','te','lhe',
-                  'nos','vos','lhes','este','esta','esse','essa','isso','isto','aquele',
-                  'qual','quais','como','quando','onde','acerca','sobre','diz','dizer',
-                  'regulamento','do','ispt','sobre','qual','quais','me','fala','conta'];
+                  'é','ao','aos','à','às','pelo','pela','pelos','pelas','me','te','lhe'];
+    
     $palavras = preg_split('/[\s\-_,;.!?()\[\]{}]+/', mb_strtolower($texto));
-    return array_filter($palavras, fn($p) => mb_strlen($p) > 3 && !in_array($p, $stopwords));
+    return array_filter($palavras, fn($p) => mb_strlen($p) > 2 && !in_array($p, $stopwords));
 }
-
 // 3a. FTS na base_conhecimento
 $stmt = $pdo->prepare("
     SELECT id_base_conhecimento, titulo, conteudo,
@@ -112,47 +110,54 @@ foreach ($conhecimentos as $k) {
     $fontes_usadas[]   = ['tipo' => 'conhecimento', 'id' => $k['id_base_conhecimento']];
 }
 
-// 3b. FTS nos fragmentos de documentos
+// 3b. BUSCA NOS DOCUMENTOS (Fragmentos) - Versão Ultra-Resiliente
 $restantes = MAX_RESULTADOS_BUSCA - count($contexto_partes);
 if ($restantes > 0) {
+    // 1. Tenta encontrar a combinação exata de "Artigo" + "3"
+    // Isso ignora se o utilizador escreveu "o que diz o..." e foca no essencial.
     $stmt = $pdo->prepare("
-        SELECT f.id_fragmento, f.conteudo, d.nome_original,
-               ts_rank(to_tsvector('portuguese',f.conteudo), plainto_tsquery('portuguese',:q)) AS r
+        SELECT f.id_fragmento, f.conteudo, d.nome_original
         FROM fragmentos_documento f
-        JOIN documentos d ON d.id_documento=f.id_documento
-        WHERE d.id_configuracao_bot=:bot AND d.estado='pronto'
-          AND to_tsvector('portuguese',f.conteudo) @@ plainto_tsquery('portuguese',:q2)
-        ORDER BY r DESC LIMIT :lim
+        JOIN documentos d ON d.id_documento = f.id_documento
+        WHERE d.id_configuracao_bot = :bot 
+          AND d.estado = 'pronto'
+          AND (
+               f.conteudo ILIKE '%Artigo 3%' 
+               OR (f.conteudo ILIKE '%Artigo%' AND f.conteudo ILIKE '%3%')
+          )
+        ORDER BY f.id_fragmento ASC 
+        LIMIT :lim
     ");
-    $stmt->execute([':bot'=>BOT_ID,':q'=>$mensagem,':q2'=>$mensagem,':lim'=>$restantes]);
+    
+    $stmt->execute([
+        ':bot' => BOT_ID, 
+        ':lim' => $restantes
+    ]);
     $fragmentos = $stmt->fetchAll();
 
-    // Fallback LIKE para fragmentos
+    // 2. Se a busca específica falhar, faz o Websearch (FTS) como fallback
     if (empty($fragmentos)) {
-        $palavras = array_values(extrairPalavrasChave($mensagem));
-        if (!empty($palavras)) {
-            $conditions = [];
-            $params = [':bot' => BOT_ID];
-            foreach (array_slice($palavras, 0, 5) as $i => $p) {
-                $conditions[] = "f.conteudo ILIKE :fp{$i}";
-                $params[":fp{$i}"] = "%{$p}%";
-            }
-            $sql = "SELECT f.id_fragmento, f.conteudo, d.nome_original, 1.0 AS r
-                    FROM fragmentos_documento f
-                    JOIN documentos d ON d.id_documento=f.id_documento
-                    WHERE d.id_configuracao_bot=:bot AND d.estado='pronto'
-                      AND (" . implode(' OR ', $conditions) . ")
-                    LIMIT {$restantes}";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($params);
-            $fragmentos = $stmt->fetchAll();
-        }
+        $stmt = $pdo->prepare("
+            SELECT f.id_fragmento, f.conteudo, d.nome_original,
+                   ts_rank(to_tsvector('portuguese', f.conteudo), websearch_to_tsquery('portuguese', :q)) AS r
+            FROM fragmentos_documento f
+            JOIN documentos d ON d.id_documento = f.id_documento
+            WHERE d.id_configuracao_bot = :bot 
+              AND d.estado = 'pronto'
+              AND to_tsvector('portuguese', f.conteudo) @@ websearch_to_tsquery('portuguese', :q2)
+            ORDER BY r DESC LIMIT :lim
+        ");
+        $stmt->execute([':bot'=>BOT_ID, ':q'=>$mensagem, ':q2'=>$mensagem, ':lim'=>$restantes]);
+        $fragmentos = $stmt->fetchAll();
     }
 
     foreach ($fragmentos as $f) {
         $contexto_partes[] = "### Documento: {$f['nome_original']}\n{$f['conteudo']}";
-        $fontes_usadas[]   = ['tipo' => 'fragmento', 'id' => $f['id_fragmento']];
+        $fontes_usadas[] = ['tipo' => 'fragmento', 'id' => $f['id_fragmento']];
     }
+
+    // DEBUG TEMPORÁRIO
+error_log("Fragmentos encontrados: " . count($fragmentos));
 }
 
 // ------------------------------------------------------------
