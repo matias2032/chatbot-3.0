@@ -13,7 +13,7 @@ function obterConexao(): PDO {
     $user   = getenv('DB_USER');
     $pass   = getenv('DB_PASS');
 
-    $dsn = "pgsql:host=$host;port=$port;dbname=$dbname;sslmode=require;options=--search_path=public";
+    $dsn = "pgsql:host=$host;port=$port;dbname=$dbname;sslmode=require";
 
     try {
         $pdo = new PDO($dsn, $user, $pass, [
@@ -21,6 +21,9 @@ function obterConexao(): PDO {
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
         ]);
+
+        // Define o search_path após a conexão (compatível com pooler do Neon)
+        $pdo->exec("SET search_path TO public");
 
         return $pdo;
 
