@@ -43,7 +43,7 @@ define('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/model
 // ------------------------------------------------------------
 // BOT — ID fixo do teu bot na tabela configuracao_bot
 // ------------------------------------------------------------
-define('BOT_ID', '68ecf749-6ac5-4aed-8bff-86e1e3a46cf2');
+define('BOT_ID', getenv('BOT_ID'));
 
 // ------------------------------------------------------------
 // UPLOADS
