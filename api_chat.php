@@ -1,6 +1,6 @@
 <?php
 // ============================================================
-//  API_CHAT.PHP — RAG melhorado: FTS + fallback por LIKE
+//  API_CHAT.PHP — RAG corrigido: busca genérica em fragmentos
 // ============================================================
 
 require_once 'configuracao.php';
@@ -20,12 +20,18 @@ $pdo = obterConexao();
 // ------------------------------------------------------------
 // 1. Obtém ou cria conversa
 // ------------------------------------------------------------
-$stmt = $pdo->prepare("SELECT id_conversa FROM conversas WHERE id_sessao=:s AND id_configuracao_bot=:bot LIMIT 1");
+$stmt = $pdo->prepare("
+    SELECT id_conversa FROM conversas
+    WHERE id_sessao=:s AND id_configuracao_bot=:bot LIMIT 1
+");
 $stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID]);
 $conversa = $stmt->fetch();
 
 if (!$conversa) {
-    $stmt = $pdo->prepare("INSERT INTO conversas (id_configuracao_bot,id_sessao) VALUES (:bot,:s) RETURNING id_conversa");
+    $stmt = $pdo->prepare("
+        INSERT INTO conversas (id_configuracao_bot, id_sessao)
+        VALUES (:bot, :s) RETURNING id_conversa
+    ");
     $stmt->execute([':bot' => BOT_ID, ':s' => $id_sessao]);
     $id_conversa = $stmt->fetchColumn();
 } else {
@@ -35,70 +41,86 @@ if (!$conversa) {
 // ------------------------------------------------------------
 // 2. Guarda mensagem do utilizador
 // ------------------------------------------------------------
-$stmt = $pdo->prepare("INSERT INTO mensagens (id_conversa,papel,conteudo) VALUES (:c,'utilizador',:m) RETURNING id_mensagem");
+$stmt = $pdo->prepare("
+    INSERT INTO mensagens (id_conversa, papel, conteudo)
+    VALUES (:c, 'utilizador', :m) RETURNING id_mensagem
+");
 $stmt->execute([':c' => $id_conversa, ':m' => $mensagem]);
 $id_msg_user = $stmt->fetchColumn();
 
 // ------------------------------------------------------------
-// 3. BUSCA RAG MELHORADA
-//    Estratégia: FTS completo → FTS simplificado → LIKE por palavras-chave
+// FUNÇÃO: Extrai palavras-chave removendo stopwords
+// ------------------------------------------------------------
+function extrairPalavrasChave(string $texto): array {
+    $stopwords = [
+        'o','a','os','as','um','uma','uns','umas','de','do','da','dos','das',
+        'em','no','na','nos','nas','por','para','com','sem','que','se','e',
+        'é','ao','aos','à','às','pelo','pela','pelos','pelas','me','te','lhe',
+        'eu','tu','ele','ela','nós','vós','eles','elas','isso','este','esta',
+        'esse','essa','aquele','aquela','como','mais','mas','ou','já','foi',
+        'ser','ter','haver','estar','fazer','dizer','ir','ver','dar','saber',
+        'querer','poder','dever','qual','quais','quando','onde','quem','quanto',
+        'diz','faz','tem','vai','vem','seu','sua','seus','suas','meu','minha',
+    ];
+    $palavras = preg_split('/[\s\-_,;.!?()\[\]{}:\/\\\\]+/', mb_strtolower(trim($texto)));
+    return array_values(array_filter(
+        $palavras,
+        fn($p) => mb_strlen($p) >= 3 && !in_array($p, $stopwords)
+    ));
+}
+
+// ------------------------------------------------------------
+// 3. BUSCA RAG
 // ------------------------------------------------------------
 $contexto_partes = [];
 $fontes_usadas   = [];
 
-/**
- * Extrai as palavras-chave mais relevantes da mensagem.
- * Remove stopwords comuns em português.
- */
-function extrairPalavrasChave(string $texto): array {
-    // Removi 'regulamento', 'ispt', 'diz' da lista de bloqueio
-    $stopwords = ['o','a','os','as','um','uma','uns','umas','de','do','da','dos','das',
-                  'em','no','na','nos','nas','por','para','com','sem','que','se','e',
-                  'é','ao','aos','à','às','pelo','pela','pelos','pelas','me','te','lhe'];
-    
-    $palavras = preg_split('/[\s\-_,;.!?()\[\]{}]+/', mb_strtolower($texto));
-    return array_filter($palavras, fn($p) => mb_strlen($p) > 2 && !in_array($p, $stopwords));
-}
-// 3a. FTS na base_conhecimento
+// ── 3a. BASE DE CONHECIMENTO ──────────────────────────────────
+
+// Tentativa 1: FTS português
 $stmt = $pdo->prepare("
     SELECT id_base_conhecimento, titulo, conteudo,
-           ts_rank(to_tsvector('portuguese', titulo||' '||conteudo), plainto_tsquery('portuguese',:q)) AS r
+           ts_rank(
+               to_tsvector('portuguese', titulo || ' ' || conteudo),
+               plainto_tsquery('portuguese', :q)
+           ) AS r
     FROM base_conhecimento
-    WHERE id_configuracao_bot=:bot AND ativo=TRUE
-      AND to_tsvector('portuguese', titulo||' '||conteudo) @@ plainto_tsquery('portuguese',:q2)
+    WHERE id_configuracao_bot = :bot AND ativo = TRUE
+      AND to_tsvector('portuguese', titulo || ' ' || conteudo)
+          @@ plainto_tsquery('portuguese', :q2)
     ORDER BY r DESC LIMIT :lim
 ");
-$stmt->execute([':bot'=>BOT_ID,':q'=>$mensagem,':q2'=>$mensagem,':lim'=>MAX_RESULTADOS_BUSCA]);
+$stmt->execute([':bot' => BOT_ID, ':q' => $mensagem, ':q2' => $mensagem, ':lim' => MAX_RESULTADOS_BUSCA]);
 $conhecimentos = $stmt->fetchAll();
 
-// 3a-fallback. Se FTS não encontrou nada, tenta LIKE com palavras-chave
+// Tentativa 2: ILIKE por palavras-chave
 if (empty($conhecimentos)) {
-    $palavras = array_values(extrairPalavrasChave($mensagem));
+    $palavras = array_slice(extrairPalavrasChave($mensagem), 0, 5);
     if (!empty($palavras)) {
-        // Constrói condição LIKE para cada palavra
-        $conditions = [];
+        $conds  = [];
         $params = [':bot' => BOT_ID];
-        foreach (array_slice($palavras, 0, 5) as $i => $p) {
-            $conditions[] = "(titulo ILIKE :p{$i} OR conteudo ILIKE :p{$i})";
+        foreach ($palavras as $i => $p) {
+            $conds[]       = "(titulo ILIKE :p{$i} OR conteudo ILIKE :p{$i})";
             $params[":p{$i}"] = "%{$p}%";
         }
-        $sql = "SELECT id_base_conhecimento, titulo, conteudo, 1.0 AS r
-                FROM base_conhecimento
-                WHERE id_configuracao_bot=:bot AND ativo=TRUE
-                  AND (" . implode(' OR ', $conditions) . ")
-                LIMIT " . MAX_RESULTADOS_BUSCA;
-        $stmt = $pdo->prepare($sql);
+        $stmt = $pdo->prepare(
+            "SELECT id_base_conhecimento, titulo, conteudo, 1.0 AS r
+             FROM base_conhecimento
+             WHERE id_configuracao_bot = :bot AND ativo = TRUE
+               AND (" . implode(' OR ', $conds) . ")
+             LIMIT " . MAX_RESULTADOS_BUSCA
+        );
         $stmt->execute($params);
         $conhecimentos = $stmt->fetchAll();
     }
 }
 
-// 3a-fallback2. Se ainda não encontrou: devolve os top por prioridade (sempre)
+// Tentativa 3: top por prioridade (fallback final)
 if (empty($conhecimentos)) {
     $stmt = $pdo->prepare("
         SELECT id_base_conhecimento, titulo, conteudo, prioridade AS r
         FROM base_conhecimento
-        WHERE id_configuracao_bot=:bot AND ativo=TRUE
+        WHERE id_configuracao_bot = :bot AND ativo = TRUE
         ORDER BY prioridade ASC LIMIT 3
     ");
     $stmt->execute([':bot' => BOT_ID]);
@@ -110,115 +132,195 @@ foreach ($conhecimentos as $k) {
     $fontes_usadas[]   = ['tipo' => 'conhecimento', 'id' => $k['id_base_conhecimento']];
 }
 
-// 3b. BUSCA NOS DOCUMENTOS (Fragmentos) - Versão Ultra-Resiliente
-$restantes = MAX_RESULTADOS_BUSCA - count($contexto_partes);
-if ($restantes > 0) {
-    // 1. Tenta encontrar a combinação exata de "Artigo" + "3"
-    // Isso ignora se o utilizador escreveu "o que diz o..." e foca no essencial.
-    $stmt = $pdo->prepare("
-        SELECT f.id_fragmento, f.conteudo, d.nome_original
-        FROM fragmentos_documento f
-        JOIN documentos d ON d.id_documento = f.id_documento
-        WHERE d.id_configuracao_bot = :bot 
-          AND d.estado = 'pronto'
-          AND (
-               f.conteudo ILIKE '%Artigo 3%' 
-               OR (f.conteudo ILIKE '%Artigo%' AND f.conteudo ILIKE '%3%')
-          )
-        ORDER BY f.id_fragmento ASC 
-        LIMIT :lim
-    ");
-    
-    $stmt->execute([
-        ':bot' => BOT_ID, 
-        ':lim' => $restantes
-    ]);
-    $fragmentos = $stmt->fetchAll();
+// ── 3b. FRAGMENTOS DE DOCUMENTOS ─────────────────────────────
+// 4 estratégias em cascata — genéricas para qualquer pergunta.
+// NOTA: A query hardcoded para "Artigo 3" foi removida — era um artefacto
+//       de teste que impedia qualquer outra pesquisa de funcionar.
 
-    // 2. Se a busca específica falhar, faz o Websearch (FTS) como fallback
+$restantes = MAX_RESULTADOS_BUSCA - count($contexto_partes);
+
+if ($restantes > 0) {
+    $fragmentos = [];
+
+    // Estratégia 1: websearch_to_tsquery (mais tolerante, suporta frases)
+    if (empty($fragmentos)) {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT f.id_fragmento, f.conteudo, d.nome_original,
+                       ts_rank(
+                           to_tsvector('portuguese', f.conteudo),
+                           websearch_to_tsquery('portuguese', :q)
+                       ) AS r
+                FROM fragmentos_documento f
+                JOIN documentos d ON d.id_documento = f.id_documento
+                WHERE d.id_configuracao_bot = :bot
+                  AND d.estado = 'pronto'
+                  AND to_tsvector('portuguese', f.conteudo)
+                      @@ websearch_to_tsquery('portuguese', :q2)
+                ORDER BY r DESC
+                LIMIT :lim
+            ");
+            $stmt->execute([':bot' => BOT_ID, ':q' => $mensagem, ':q2' => $mensagem, ':lim' => $restantes]);
+            $fragmentos = $stmt->fetchAll();
+        } catch (PDOException $e) {
+            // websearch_to_tsquery pode rejeitar certas entradas — passa para o seguinte
+            error_log("[RAG] websearch_to_tsquery falhou: " . $e->getMessage());
+            $fragmentos = [];
+        }
+    }
+
+    // Estratégia 2: plainto_tsquery clássico
+    if (empty($fragmentos)) {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT f.id_fragmento, f.conteudo, d.nome_original,
+                       ts_rank(
+                           to_tsvector('portuguese', f.conteudo),
+                           plainto_tsquery('portuguese', :q)
+                       ) AS r
+                FROM fragmentos_documento f
+                JOIN documentos d ON d.id_documento = f.id_documento
+                WHERE d.id_configuracao_bot = :bot
+                  AND d.estado = 'pronto'
+                  AND to_tsvector('portuguese', f.conteudo)
+                      @@ plainto_tsquery('portuguese', :q2)
+                ORDER BY r DESC
+                LIMIT :lim
+            ");
+            $stmt->execute([':bot' => BOT_ID, ':q' => $mensagem, ':q2' => $mensagem, ':lim' => $restantes]);
+            $fragmentos = $stmt->fetchAll();
+        } catch (PDOException $e) {
+            error_log("[RAG] plainto_tsquery falhou: " . $e->getMessage());
+            $fragmentos = [];
+        }
+    }
+
+    // Estratégia 3: ILIKE por palavras-chave individuais
+    // Funciona mesmo quando o FTS falha (acentos, palavras curtas, etc.)
+    if (empty($fragmentos)) {
+        $palavras = array_slice(extrairPalavrasChave($mensagem), 0, 6);
+        if (!empty($palavras)) {
+            $conds  = [];
+            $params = [':bot' => BOT_ID];
+            foreach ($palavras as $i => $p) {
+                $conds[]         = "f.conteudo ILIKE :p{$i}";
+                $params[":p{$i}"] = "%{$p}%";
+            }
+            $sql = "
+                SELECT f.id_fragmento, f.conteudo, d.nome_original, 1.0 AS r
+                FROM fragmentos_documento f
+                JOIN documentos d ON d.id_documento = f.id_documento
+                WHERE d.id_configuracao_bot = :bot
+                  AND d.estado = 'pronto'
+                  AND (" . implode(' OR ', $conds) . ")
+                ORDER BY f.indice_fragmento ASC
+                LIMIT " . (int)$restantes;
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $fragmentos = $stmt->fetchAll();
+        }
+    }
+
+    // Estratégia 4: Primeiros fragmentos dos documentos mais recentes
+    // Garante sempre contexto quando há documentos prontos,
+    // mesmo para perguntas vagas como "o que diz o documento?"
     if (empty($fragmentos)) {
         $stmt = $pdo->prepare("
-            SELECT f.id_fragmento, f.conteudo, d.nome_original,
-                   ts_rank(to_tsvector('portuguese', f.conteudo), websearch_to_tsquery('portuguese', :q)) AS r
+            SELECT f.id_fragmento, f.conteudo, d.nome_original, 0.1 AS r
             FROM fragmentos_documento f
             JOIN documentos d ON d.id_documento = f.id_documento
-            WHERE d.id_configuracao_bot = :bot 
+            WHERE d.id_configuracao_bot = :bot
               AND d.estado = 'pronto'
-              AND to_tsvector('portuguese', f.conteudo) @@ websearch_to_tsquery('portuguese', :q2)
-            ORDER BY r DESC LIMIT :lim
+            ORDER BY d.processado_em DESC, f.indice_fragmento ASC
+            LIMIT :lim
         ");
-        $stmt->execute([':bot'=>BOT_ID, ':q'=>$mensagem, ':q2'=>$mensagem, ':lim'=>$restantes]);
+        $stmt->execute([':bot' => BOT_ID, ':lim' => $restantes]);
         $fragmentos = $stmt->fetchAll();
     }
 
     foreach ($fragmentos as $f) {
         $contexto_partes[] = "### Documento: {$f['nome_original']}\n{$f['conteudo']}";
-        $fontes_usadas[] = ['tipo' => 'fragmento', 'id' => $f['id_fragmento']];
+        $fontes_usadas[]   = ['tipo' => 'fragmento', 'id' => $f['id_fragmento']];
     }
 
-    // DEBUG TEMPORÁRIO
-error_log("Fragmentos encontrados: " . count($fragmentos));
+    error_log("[RAG] Mensagem: '{$mensagem}' | Fragmentos encontrados: " . count($fragmentos));
 }
 
 // ------------------------------------------------------------
 // 4. Perfil do criador
 // ------------------------------------------------------------
 $stmt = $pdo->prepare("
-    SELECT p.*, EXTRACT(YEAR FROM AGE(p.data_nascimento))::INTEGER AS idade,
-           b.nome AS nome_bot, b.prompt_sistema
+    SELECT p.*,
+           EXTRACT(YEAR FROM AGE(p.data_nascimento))::INTEGER AS idade,
+           b.nome AS nome_bot,
+           b.prompt_sistema
     FROM perfil_criador p
-    JOIN configuracao_bot b ON b.id_configuracao_bot=p.id_configuracao_bot
-    WHERE p.id_configuracao_bot=:bot LIMIT 1
+    JOIN configuracao_bot b ON b.id_configuracao_bot = p.id_configuracao_bot
+    WHERE p.id_configuracao_bot = :bot
+    LIMIT 1
 ");
 $stmt->execute([':bot' => BOT_ID]);
 $perfil = $stmt->fetch();
 
 // ------------------------------------------------------------
-// 5. Prompt de sistema
+// 5. Monta prompt de sistema
 // ------------------------------------------------------------
-$identidade  = "### REGRAS DE IDENTIDADE (CRÍTICO)\n";
-$identidade .= "1. O teu nome é MeuBot.\n";
-$identidade .= "2. Foste integralmente desenvolvido por Matias Alberto Matavel.\n";
-$identidade .= "3. Se perguntarem quem te criou: 'Fui criado pelo Matias Alberto Matavel, Desenvolvedor Backend e estudante do ISPT.'\n";
-$identidade .= "4. Nunca digas que és produto da Google ou outro fornecedor.\n\n";
+$nome_bot_str   = $perfil['nome_bot']      ?? 'MeuBot';
+$nome_criador_str = $perfil['nome_completo'] ?? 'o teu criador';
+
+$identidade  = "### IDENTIDADE (OBRIGATÓRIO)\n";
+$identidade .= "1. O teu nome é {$nome_bot_str}.\n";
+$identidade .= "2. Foste integralmente criado por {$nome_criador_str}.\n";
+$identidade .= "3. Nunca digas que és produto da Google, Anthropic ou outro fornecedor.\n\n";
 
 $prompt_sistema = $identidade . ($perfil['prompt_sistema'] ?? '');
 
 if ($perfil) {
-    $prompt_sistema .= "\n\n## Informações do Criador\n"
+    $idade_txt = $perfil['idade'] ? "{$perfil['idade']} anos" : 'não informada';
+    $prompt_sistema .= "\n\n## Dados do Criador\n"
         . "- Nome: {$perfil['nome_completo']}\n"
+        . "- Data de nascimento: {$perfil['data_nascimento']}\n"
+        . "- Idade: {$idade_txt}\n"
+        . "- Telefone: {$perfil['telefone']}\n"
+        . "- Morada: {$perfil['morada']}\n"
+        . "- Email: {$perfil['email']}\n"
         . "- Profissão: {$perfil['profissao']}\n"
-        . "- Instituição: Instituto Superior Politécnico de Tete (ISPT), Moçambique\n"
+        . "- Nacionalidade: {$perfil['nacionalidade']}\n"
         . "- Bio: {$perfil['bio']}\n";
 }
 
 if (!empty($contexto_partes)) {
     $prompt_sistema .= "\n\n## Base de Conhecimento\n"
-        . "Usa OBRIGATORIAMENTE estes dados para responder à pergunta do utilizador:\n\n"
+        . "Usa OBRIGATORIAMENTE as informações abaixo para responder. "
+        . "Se a resposta estiver aqui, usa-a directamente. "
+        . "Se não estiver, diz honestamente que não tens essa informação.\n\n"
         . implode("\n\n---\n\n", $contexto_partes);
 } else {
-    // Informa o modelo que não há contexto — evita respostas inventadas
-    $prompt_sistema .= "\n\n## Base de Conhecimento\nNenhum contexto relevante encontrado para esta pergunta.";
+    $prompt_sistema .= "\n\n## Base de Conhecimento\n"
+        . "Não foi encontrado contexto relevante para esta pergunta. "
+        . "Responde de forma geral sendo honesto sobre as limitações.";
 }
 
 // ------------------------------------------------------------
-// 6. Histórico recente
+// 6. Histórico recente da conversa
 // ------------------------------------------------------------
 $stmt = $pdo->prepare("
     SELECT papel, conteudo FROM mensagens
-    WHERE id_conversa=:c AND id_mensagem!=:id
+    WHERE id_conversa = :c AND id_mensagem != :id
     ORDER BY enviada_em DESC LIMIT :lim
 ");
-$stmt->execute([':c'=>$id_conversa,':id'=>$id_msg_user,':lim'=>MAX_HISTORICO_MENSAGENS]);
+$stmt->execute([':c' => $id_conversa, ':id' => $id_msg_user, ':lim' => MAX_HISTORICO_MENSAGENS]);
 $historico = array_reverse($stmt->fetchAll());
 
 // ------------------------------------------------------------
-// 7. Payload Gemini
+// 7. Payload para a API do Gemini
 // ------------------------------------------------------------
 $contents = [];
 foreach ($historico as $msg) {
-    $contents[] = ['role' => $msg['papel'] === 'utilizador' ? 'user' : 'model',
-                   'parts' => [['text' => $msg['conteudo']]]];
+    $contents[] = [
+        'role'  => $msg['papel'] === 'utilizador' ? 'user' : 'model',
+        'parts' => [['text' => $msg['conteudo']]],
+    ];
 }
 $contents[] = ['role' => 'user', 'parts' => [['text' => $mensagem]]];
 
@@ -229,23 +331,23 @@ $payload = [
 ];
 
 // ------------------------------------------------------------
-// 8. Chamada cURL
+// 8. Chamada cURL à API do Gemini
 // ------------------------------------------------------------
 $url = GEMINI_API_URL . '?key=' . GEMINI_CHAVE_API;
 $ch  = curl_init($url);
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => json_encode($payload),
+    CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
     CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
     CURLOPT_TIMEOUT        => 30,
     CURLOPT_SSL_VERIFYPEER => false,
     CURLOPT_SSL_VERIFYHOST => false,
 ]);
-$inicio       = microtime(true);
-$raw          = curl_exec($ch);
-$tempo_ms     = (int)((microtime(true) - $inicio) * 1000);
-$http_code    = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$inicio    = microtime(true);
+$raw       = curl_exec($ch);
+$tempo_ms  = (int)((microtime(true) - $inicio) * 1000);
+$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
 if ($raw === false || $http_code !== 200) {
@@ -253,31 +355,45 @@ if ($raw === false || $http_code !== 200) {
 }
 
 $dados      = json_decode($raw, true);
-$texto_resp = $dados['candidates'][0]['content']['parts'][0]['text'] ?? 'Não consegui gerar uma resposta.';
+$texto_resp = $dados['candidates'][0]['content']['parts'][0]['text']
+    ?? 'Não consegui gerar uma resposta. Tenta novamente.';
 $t_entrada  = $dados['usageMetadata']['promptTokenCount']     ?? null;
 $t_saida    = $dados['usageMetadata']['candidatesTokenCount'] ?? null;
 
 // ------------------------------------------------------------
-// 9 & 10. Guarda resposta + fontes
+// 9. Guarda resposta do assistente
 // ------------------------------------------------------------
 $stmt = $pdo->prepare("
-    INSERT INTO mensagens (id_conversa,papel,conteudo,tokens_entrada,tokens_saida,tempo_resposta_ms)
-    VALUES (:c,'assistente',:m,:te,:ts,:t) RETURNING id_mensagem
+    INSERT INTO mensagens
+        (id_conversa, papel, conteudo, tokens_entrada, tokens_saida, tempo_resposta_ms)
+    VALUES (:c, 'assistente', :m, :te, :ts, :t)
+    RETURNING id_mensagem
 ");
-$stmt->execute([':c'=>$id_conversa,':m'=>$texto_resp,':te'=>$t_entrada,':ts'=>$t_saida,':t'=>$tempo_ms]);
+$stmt->execute([
+    ':c'  => $id_conversa,
+    ':m'  => $texto_resp,
+    ':te' => $t_entrada,
+    ':ts' => $t_saida,
+    ':t'  => $tempo_ms,
+]);
 $id_msg_bot = $stmt->fetchColumn();
 
+// ------------------------------------------------------------
+// 10. Regista fontes usadas
+// ------------------------------------------------------------
 foreach ($fontes_usadas as $fonte) {
-    $pdo->prepare("INSERT INTO fontes_mensagem (id_mensagem,id_base_conhecimento,id_fragmento) VALUES (:m,:k,:f)")
-        ->execute([
-            ':m' => $id_msg_bot,
-            ':k' => $fonte['tipo'] === 'conhecimento' ? $fonte['id'] : null,
-            ':f' => $fonte['tipo'] === 'fragmento'    ? $fonte['id'] : null,
-        ]);
+    $pdo->prepare("
+        INSERT INTO fontes_mensagem (id_mensagem, id_base_conhecimento, id_fragmento)
+        VALUES (:m, :k, :f)
+    ")->execute([
+        ':m' => $id_msg_bot,
+        ':k' => $fonte['tipo'] === 'conhecimento' ? $fonte['id'] : null,
+        ':f' => $fonte['tipo'] === 'fragmento'    ? $fonte['id'] : null,
+    ]);
 }
 
 // ------------------------------------------------------------
-// 11. Resposta
+// 11. Resposta final ao frontend
 // ------------------------------------------------------------
 respostaJson(true, [
     'resposta'    => $texto_resp,

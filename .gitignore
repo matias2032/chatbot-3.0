@@ -1,2 +1,14 @@
+# Configurações e Segredos
 .env
-/uploads/
+configuracao.php
+
+# Dependências (O Composer baixa estas pastas)
+/vendor/
+
+# Ficheiros de Upload e Media
+/uploads/*
+!/uploads/.gitkeep
+
+# Logs e Temporários
+*.log
+.phpunit.result.cache
