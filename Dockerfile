@@ -9,8 +9,8 @@ RUN a2enmod rewrite
 
 COPY . /var/www/html/
 
-RUN chown -R www-data:www-data /var/www/html/uploads \
+RUN mkdir -p /var/www/html/uploads \
+    && chown -R www-data:www-data /var/www/html/uploads \
     && chmod -R 755 /var/www/html/uploads
 
-# Configura o Apache para usar a porta $PORT do Render
 CMD bash -c "sed -i 's/80/${PORT}/g' /etc/apache2/ports.conf /etc/apache2/sites-enabled/*.conf && apache2-foreground"
