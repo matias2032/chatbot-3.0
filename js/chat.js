@@ -1,28 +1,245 @@
 // ============================================================
-//  CHAT.JS — Lógica do chat público
+//  CHAT.JS — Gestão de conversas + persistência ao recarregar
 // ============================================================
 
-// Gera ou recupera o ID de sessão único do utilizador
-function obterIdSessao() {
-    let id = sessionStorage.getItem('chatbot_sessao');
-    if (!id) {
-        id = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
-        sessionStorage.setItem('chatbot_sessao', id);
-    }
-    return id;
-}
+// ── Estado global ────────────────────────────────────────────
+let ID_SESSAO    = null;
+let ID_CONVERSA  = null;
 
-const ID_SESSAO = obterIdSessao();
-
-// Referências DOM
+// ── Referências DOM ──────────────────────────────────────────
 const janela       = document.getElementById('janela-mensagens');
 const campo        = document.getElementById('campo-mensagem');
 const btnEnviar    = document.getElementById('btn-enviar');
 const btnLimpar    = document.getElementById('btn-limpar');
 const indicador    = document.getElementById('indicador-digitacao');
+const listaChats   = document.getElementById('lista-chats');
+const btnNovoChat  = document.getElementById('btn-novo-chat');
 
 // ============================================================
-// Auto-resize do textarea
+// INICIALIZAÇÃO — restaura conversa activa ao carregar a página
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+    const idSalvo = localStorage.getItem('chatbot_id_conversa');
+
+    if (idSalvo) {
+        // Tenta carregar a conversa guardada
+        await carregarConversa(idSalvo, false);
+    }
+    // Se não houver conversa salva, mostra apenas a mensagem de boas-vindas
+
+    destacarItemActivo();
+});
+
+// ============================================================
+// CARREGAR CONVERSA — busca mensagens do servidor
+// ============================================================
+async function carregarConversa(idConversa, limparPrimeiro = true) {
+    try {
+        const resp = await fetch(`api_conversas.php?acao=carregar&id_conversa=${idConversa}`);
+        const dados = await resp.json();
+
+        if (!dados.sucesso || !dados.dados.mensagens.length) {
+            // Conversa vazia ou não encontrada — começa do zero
+            if (idConversa === localStorage.getItem('chatbot_id_conversa')) {
+                localStorage.removeItem('chatbot_id_conversa');
+            }
+            return;
+        }
+
+        if (limparPrimeiro) limparJanela();
+
+        // Remove boas-vindas — há mensagens reais
+        document.getElementById('msg-boas-vindas')?.remove();
+
+        ID_CONVERSA = dados.dados.id_conversa;
+        ID_SESSAO   = dados.dados.id_sessao;
+
+        // Guarda no localStorage para persistir ao recarregar
+        localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+
+        // Renderiza todas as mensagens
+        for (const msg of dados.dados.mensagens) {
+            const tipo = msg.papel === 'utilizador' ? 'user' : 'bot';
+            adicionarMensagem(msg.conteudo, tipo, false, msg.enviada_em);
+        }
+
+        rolarParaBaixo();
+        destacarItemActivo();
+
+    } catch (e) {
+        console.error('Erro ao carregar conversa:', e);
+    }
+}
+
+// ============================================================
+// NOVA CONVERSA — cria no servidor e limpa o ecrã
+// ============================================================
+async function novaConversa() {
+    try {
+        const resp  = await fetch('api_conversas.php?acao=criar');
+        const dados = await resp.json();
+
+        if (!dados.sucesso) return;
+
+        ID_CONVERSA = dados.dados.id_conversa;
+        ID_SESSAO   = dados.dados.id_sessao;
+
+        localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+
+        limparJanela();
+        mostrarBoasVindas();
+        adicionarItemSidebar(dados.dados);
+        destacarItemActivo();
+
+    } catch (e) {
+        console.error('Erro ao criar conversa:', e);
+    }
+}
+
+// ============================================================
+// APAGAR CONVERSA
+// ============================================================
+async function apagarConversa(idConversa) {
+    if (!confirm('Apagar esta conversa permanentemente?')) return;
+
+    try {
+        const resp  = await fetch('api_conversas.php?acao=apagar', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ id_conversa: idConversa }),
+        });
+        const dados = await resp.json();
+
+        if (!dados.sucesso) return;
+
+        // Remove item da sidebar
+        document.querySelector(`.item-chat[data-id="${idConversa}"]`)?.remove();
+
+        // Se era a conversa activa, limpa e começa de novo
+        if (idConversa === ID_CONVERSA) {
+            ID_CONVERSA = null;
+            ID_SESSAO   = null;
+            localStorage.removeItem('chatbot_id_conversa');
+            limparJanela();
+            mostrarBoasVindas();
+        }
+
+        // Mostra "sem conversas" se a lista ficou vazia
+        if (!listaChats.querySelector('.item-chat')) {
+            listaChats.innerHTML = '<p class="sem-chats">Nenhuma conversa ainda</p>';
+        }
+
+    } catch (e) {
+        console.error('Erro ao apagar conversa:', e);
+    }
+}
+
+// ============================================================
+// SIDEBAR — adicionar item dinamicamente
+// ============================================================
+function adicionarItemSidebar(conversa) {
+    // Remove o aviso "sem conversas" se existir
+    listaChats.querySelector('.sem-chats')?.remove();
+
+    const data = new Date().toLocaleString('pt-PT', {
+        day: '2-digit', month: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+    });
+
+    const div = document.createElement('div');
+    div.className  = 'item-chat';
+    div.dataset.id     = conversa.id_conversa;
+    div.dataset.sessao = conversa.id_sessao;
+    div.innerHTML = `
+        <div class="item-chat-icon">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M2 2h10a1 1 0 011 1v6a1 1 0 01-1 1H5l-3 2V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
+            </svg>
+        </div>
+        <div class="item-chat-info">
+            <div class="item-chat-titulo">Nova conversa</div>
+            <div class="item-chat-meta">${data} · 0 msgs</div>
+        </div>
+        <button class="btn-apagar-chat" title="Apagar conversa" data-id="${conversa.id_conversa}">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                <path d="M2 3h9M5 3V2h3v1M4 3l.5 7h4L9 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+        </button>`;
+
+    // Insere no topo da lista
+    listaChats.prepend(div);
+    bindItemChat(div);
+}
+
+// ── Actualiza o título do primeiro item com a 1ª mensagem enviada ──
+function actualizarTituloSidebar(texto) {
+    const activo = listaChats.querySelector('.item-chat.activo .item-chat-titulo');
+    if (activo && activo.textContent === 'Nova conversa') {
+        activo.textContent = texto.length > 35 ? texto.slice(0, 35) + '…' : texto;
+    }
+}
+
+// ── Destaca o item da conversa activa ──
+function destacarItemActivo() {
+    listaChats.querySelectorAll('.item-chat').forEach(el => {
+        el.classList.toggle('activo', el.dataset.id === ID_CONVERSA);
+    });
+}
+
+// ── Bind de eventos em cada item da sidebar ──
+function bindItemChat(el) {
+    // Clicar no item carrega a conversa
+    el.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-apagar-chat')) return;
+        carregarConversa(el.dataset.id, true);
+    });
+
+    // Botão apagar
+    el.querySelector('.btn-apagar-chat').addEventListener('click', (e) => {
+        e.stopPropagation();
+        apagarConversa(el.dataset.id);
+    });
+}
+
+// Bind nos itens já existentes no HTML (gerados pelo PHP)
+document.querySelectorAll('.item-chat').forEach(bindItemChat);
+
+// ── Botões principais ──
+btnNovoChat.addEventListener('click', novaConversa);
+btnLimpar.addEventListener('click', novaConversa);
+
+// ============================================================
+// JANELA — utilitários
+// ============================================================
+function limparJanela() {
+    janela.innerHTML = '';
+}
+
+function mostrarBoasVindas() {
+    // Recria a mensagem de boas-vindas sem recarregar a página
+    const div = document.createElement('div');
+    div.className = 'mensagem mensagem-bot';
+    div.id = 'msg-boas-vindas';
+    div.innerHTML = `
+        <div class="avatar-bot">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <circle cx="9" cy="9" r="8" stroke="var(--cor-acento)" stroke-width="1.2"/>
+                <circle cx="9" cy="9" r="2" fill="var(--cor-acento)"/>
+            </svg>
+        </div>
+        <div class="balao">
+            <p>Olá! Como posso ajudar?</p>
+            <div class="sugestoes">
+                <button class="sugestao" onclick="usarSugestao(this)">Quem te criou?</button>
+                <button class="sugestao" onclick="usarSugestao(this)">O que sabes fazer?</button>
+                <button class="sugestao" onclick="usarSugestao(this)">Que documentos tens disponíveis?</button>
+            </div>
+        </div>`;
+    janela.appendChild(div);
+}
+
+// ============================================================
+// INPUT — auto-resize e atalhos de teclado
 // ============================================================
 campo.addEventListener('input', () => {
     campo.style.height = 'auto';
@@ -30,7 +247,6 @@ campo.addEventListener('input', () => {
     btnEnviar.disabled = campo.value.trim() === '';
 });
 
-// Enviar com Enter (Shift+Enter = nova linha)
 campo.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -39,11 +255,7 @@ campo.addEventListener('keydown', (e) => {
 });
 
 btnEnviar.addEventListener('click', enviarMensagem);
-btnLimpar.addEventListener('click', limparChat);
 
-// ============================================================
-// Usar sugestão de início
-// ============================================================
 function usarSugestao(btn) {
     campo.value = btn.textContent;
     campo.style.height = 'auto';
@@ -52,25 +264,41 @@ function usarSugestao(btn) {
 }
 
 // ============================================================
-// Formata hora actual
+// FORMATAR E ESCAPAR
 // ============================================================
-function horaAgora() {
-    return new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+function escaparHtml(texto) {
+    return texto
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function formatarTexto(texto) {
+    return escaparHtml(texto)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g,     '<em>$1</em>')
+        .replace(/`(.*?)`/g,       '<code>$1</code>')
+        .replace(/\n/g,            '<br>');
+}
+
+function horaFormatada(dataStr) {
+    const d = dataStr ? new Date(dataStr) : new Date();
+    return d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 }
 
 // ============================================================
-// Adiciona mensagem na janela
+// ADICIONAR MENSAGEM NA JANELA
 // ============================================================
-function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true) {
-    // Remove mensagem de boas-vindas na primeira interacção do utilizador
-    const boasVindas = document.getElementById('msg-boas-vindas');
-    if (boasVindas && tipo === 'user') boasVindas.remove();
+function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true, dataStr = null) {
+    // Remove boas-vindas na primeira mensagem do utilizador
+    if (tipo === 'user') document.getElementById('msg-boas-vindas')?.remove();
 
-    const div = document.createElement('div');
+    const div  = document.createElement('div');
     div.className = `mensagem mensagem-${tipo}`;
 
     const hora = mostrarHora
-        ? `<div class="hora-mensagem">${horaAgora()}</div>`
+        ? `<div class="hora-mensagem">${horaFormatada(dataStr)}</div>`
         : '';
 
     if (tipo === 'bot') {
@@ -100,9 +328,7 @@ function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true) {
                     <path d="M9 6v4M9 12v.5" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
             </div>
-            <div>
-                <div class="balao"><p>${escaparHtml(texto)}</p></div>
-            </div>`;
+            <div><div class="balao"><p>${escaparHtml(texto)}</p></div></div>`;
     }
 
     janela.appendChild(div);
@@ -110,80 +336,60 @@ function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true) {
     return div;
 }
 
-// ============================================================
-// Formata texto do bot (markdown básico)
-// ============================================================
-function formatarTexto(texto) {
-    return escaparHtml(texto)
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.*?)\*/g,     '<em>$1</em>')
-        .replace(/`(.*?)`/g,       '<code>$1</code>')
-        .replace(/\n/g,            '<br>');
-}
-
-function escaparHtml(texto) {
-    return texto
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
+function mostrarDigitacao()  { indicador.style.display = 'flex'; rolarParaBaixo(); }
+function ocultarDigitacao()  { indicador.style.display = 'none'; }
+function rolarParaBaixo()    { setTimeout(() => { janela.scrollTop = janela.scrollHeight; }, 50); }
 
 // ============================================================
-// Mostra/oculta indicador de digitação
-// ============================================================
-function mostrarDigitacao() {
-    indicador.style.display = 'flex';
-    rolarParaBaixo();
-}
-
-function ocultarDigitacao() {
-    indicador.style.display = 'none';
-}
-
-// ============================================================
-// Rola para o fundo da janela
-// ============================================================
-function rolarParaBaixo() {
-    setTimeout(() => {
-        janela.scrollTop = janela.scrollHeight;
-    }, 50);
-}
-
-// ============================================================
-// ENVIAR MENSAGEM — função principal
+// ENVIAR MENSAGEM
 // ============================================================
 async function enviarMensagem() {
     const texto = campo.value.trim();
     if (!texto) return;
 
-    // Limpa o campo e desactiva o botão
+    // Se não há conversa activa, cria uma antes de enviar
+    if (!ID_SESSAO) {
+        await novaConversa();
+        // novaConversa() define ID_SESSAO e ID_CONVERSA
+    }
+
     campo.value = '';
     campo.style.height = 'auto';
     btnEnviar.disabled = true;
     campo.disabled = true;
 
-    // Mostra a mensagem do utilizador
     adicionarMensagem(texto, 'user');
-
-    // Mostra indicador de digitação
+    actualizarTituloSidebar(texto);
     mostrarDigitacao();
 
     try {
         const resposta = await fetch('api_chat.php', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
-                mensagem:  texto,
-                id_sessao: ID_SESSAO,
-            }),
+            body:    JSON.stringify({ mensagem: texto, id_sessao: ID_SESSAO }),
         });
 
         const dados = await resposta.json();
         ocultarDigitacao();
 
         if (dados.sucesso) {
+            // Sincroniza o id_conversa retornado pelo servidor
+            if (dados.dados.id_conversa) {
+                ID_CONVERSA = dados.dados.id_conversa;
+                localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+                destacarItemActivo();
+            }
             adicionarMensagem(dados.dados.resposta, 'bot');
+
+            // Actualiza contagem na sidebar
+            const metaActivo = listaChats.querySelector('.item-chat.activo .item-chat-meta');
+            if (metaActivo) {
+                const match = metaActivo.textContent.match(/(\d+) msgs/);
+                if (match) {
+                    const novaContagem = parseInt(match[1]) + 2; // user + bot
+                    metaActivo.textContent = metaActivo.textContent.replace(/\d+ msgs/, `${novaContagem} msgs`);
+                }
+            }
         } else {
             adicionarMensagem(dados.erro || 'Ocorreu um erro. Tenta novamente.', 'erro');
         }
@@ -196,24 +402,4 @@ async function enviarMensagem() {
         campo.disabled = false;
         campo.focus();
     }
-}
-
-// ============================================================
-// LIMPAR CHAT
-// ============================================================
-function limparChat() {
-    if (!confirm('Limpar toda a conversa?')) return;
-
-    // Remove todas as mensagens excepto a de boas-vindas
-    const mensagens = janela.querySelectorAll('.mensagem:not(#msg-boas-vindas)');
-    mensagens.forEach(m => m.remove());
-
-    // Recria a mensagem de boas-vindas se foi removida
-    if (!document.getElementById('msg-boas-vindas')) {
-        location.reload();
-    }
-
-    // Nova sessão
-    sessionStorage.removeItem('chatbot_sessao');
-    location.reload();
 }
