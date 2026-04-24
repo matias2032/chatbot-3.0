@@ -29,7 +29,7 @@ $pdo = obterConexao();
 $stmt = $pdo->prepare("
     SELECT id_conversa FROM conversas
     WHERE id_sessao = :s AND id_configuracao_bot = :bot
-      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+      AND (id_utilizador = :uid OR (:uid2::text IS NULL AND id_utilizador IS NULL))
     LIMIT 1
 ");
 $stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
