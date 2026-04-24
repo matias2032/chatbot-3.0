@@ -75,6 +75,12 @@ async function carregarConversa(idConversa, limparPrimeiro = true) {
 // NOVA CONVERSA — cria no servidor e limpa o ecrã
 // ============================================================
 async function novaConversa() {
+    // Redireciona se não estiver logado
+    if (typeof UTILIZADOR_LOGADO !== 'undefined' && !UTILIZADOR_LOGADO) {
+        window.location.href = 'login.php';
+        return;
+    }
+
     try {
         const resp  = await fetch('api_conversas.php?acao=criar');
         const dados = await resp.json();
@@ -138,7 +144,6 @@ async function apagarConversa(idConversa) {
 // SIDEBAR — adicionar item dinamicamente
 // ============================================================
 function adicionarItemSidebar(conversa) {
-    // Remove o aviso "sem conversas" se existir
     listaChats.querySelector('.sem-chats')?.remove();
 
     const data = new Date().toLocaleString('pt-PT', {
@@ -166,12 +171,10 @@ function adicionarItemSidebar(conversa) {
             </svg>
         </button>`;
 
-    // Insere no topo da lista
     listaChats.prepend(div);
     bindItemChat(div);
 }
 
-// ── Actualiza o título do primeiro item com a 1ª mensagem enviada ──
 function actualizarTituloSidebar(texto) {
     const activo = listaChats.querySelector('.item-chat.activo .item-chat-titulo');
     if (activo && activo.textContent === 'Nova conversa') {
@@ -179,34 +182,35 @@ function actualizarTituloSidebar(texto) {
     }
 }
 
-// ── Destaca o item da conversa activa ──
 function destacarItemActivo() {
     listaChats.querySelectorAll('.item-chat').forEach(el => {
         el.classList.toggle('activo', el.dataset.id === ID_CONVERSA);
     });
 }
 
-// ── Bind de eventos em cada item da sidebar ──
 function bindItemChat(el) {
-    // Clicar no item carrega a conversa
     el.addEventListener('click', (e) => {
         if (e.target.closest('.btn-apagar-chat')) return;
         carregarConversa(el.dataset.id, true);
     });
 
-    // Botão apagar
     el.querySelector('.btn-apagar-chat').addEventListener('click', (e) => {
         e.stopPropagation();
         apagarConversa(el.dataset.id);
     });
 }
 
-// Bind nos itens já existentes no HTML (gerados pelo PHP)
+// ============================================================
+// BINDINGS — Botões e Eventos
+// ============================================================
+
+// Bind nos itens já existentes no HTML (só existem se logado)
 document.querySelectorAll('.item-chat').forEach(bindItemChat);
 
-// ── Botões principais ──
-btnNovoChat.addEventListener('click', novaConversa);
-btnLimpar.addEventListener('click', novaConversa);
+// Botões principais (só faz bind se os elementos existirem)
+if (btnNovoChat) btnNovoChat.addEventListener('click', novaConversa);
+if (btnLimpar)   btnLimpar.addEventListener('click', novaConversa);
+if (btnEnviar)   btnEnviar.addEventListener('click', enviarMensagem);
 
 // ============================================================
 // JANELA — utilitários
@@ -216,7 +220,6 @@ function limparJanela() {
 }
 
 function mostrarBoasVindas() {
-    // Recria a mensagem de boas-vindas sem recarregar a página
     const div = document.createElement('div');
     div.className = 'mensagem mensagem-bot';
     div.id = 'msg-boas-vindas';
@@ -241,20 +244,20 @@ function mostrarBoasVindas() {
 // ============================================================
 // INPUT — auto-resize e atalhos de teclado
 // ============================================================
-campo.addEventListener('input', () => {
-    campo.style.height = 'auto';
-    campo.style.height = Math.min(campo.scrollHeight, 120) + 'px';
-    btnEnviar.disabled = campo.value.trim() === '';
-});
+if (campo) {
+    campo.addEventListener('input', () => {
+        campo.style.height = 'auto';
+        campo.style.height = Math.min(campo.scrollHeight, 120) + 'px';
+        btnEnviar.disabled = campo.value.trim() === '';
+    });
 
-campo.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        if (!btnEnviar.disabled) enviarMensagem();
-    }
-});
-
-btnEnviar.addEventListener('click', enviarMensagem);
+    campo.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (!btnEnviar.disabled) enviarMensagem();
+        }
+    });
+}
 
 function usarSugestao(btn) {
     campo.value = btn.textContent;
@@ -291,7 +294,6 @@ function horaFormatada(dataStr) {
 // ADICIONAR MENSAGEM NA JANELA
 // ============================================================
 function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true, dataStr = null) {
-    // Remove boas-vindas na primeira mensagem do utilizador
     if (tipo === 'user') document.getElementById('msg-boas-vindas')?.remove();
 
     const div  = document.createElement('div');
@@ -344,13 +346,17 @@ function rolarParaBaixo()    { setTimeout(() => { janela.scrollTop = janela.scro
 // ENVIAR MENSAGEM
 // ============================================================
 async function enviarMensagem() {
+    // Redireciona se não estiver logado
+    if (typeof UTILIZADOR_LOGADO !== 'undefined' && !UTILIZADOR_LOGADO) {
+        window.location.href = 'login.php';
+        return;
+    }
+
     const texto = campo.value.trim();
     if (!texto) return;
 
-    // Se não há conversa activa, cria uma antes de enviar
     if (!ID_SESSAO) {
         await novaConversa();
-        // novaConversa() define ID_SESSAO e ID_CONVERSA
     }
 
     campo.value = '';
@@ -373,7 +379,6 @@ async function enviarMensagem() {
         ocultarDigitacao();
 
         if (dados.sucesso) {
-            // Sincroniza o id_conversa retornado pelo servidor
             if (dados.dados.id_conversa) {
                 ID_CONVERSA = dados.dados.id_conversa;
                 localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
@@ -381,12 +386,11 @@ async function enviarMensagem() {
             }
             adicionarMensagem(dados.dados.resposta, 'bot');
 
-            // Actualiza contagem na sidebar
             const metaActivo = listaChats.querySelector('.item-chat.activo .item-chat-meta');
             if (metaActivo) {
                 const match = metaActivo.textContent.match(/(\d+) msgs/);
                 if (match) {
-                    const novaContagem = parseInt(match[1]) + 2; // user + bot
+                    const novaContagem = parseInt(match[1]) + 2; 
                     metaActivo.textContent = metaActivo.textContent.replace(/\d+ msgs/, `${novaContagem} msgs`);
                 }
             }
