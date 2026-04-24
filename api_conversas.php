@@ -42,7 +42,6 @@ if ($acao === 'migrar') {
 
     if (!$id_sessao) respostaJson(false, null, 'Sessão inválida.');
 
-    // Só migra conversas que ainda não têm utilizador associado
     $stmt = $pdo->prepare("
         UPDATE conversas
         SET id_utilizador = :uid
@@ -71,7 +70,7 @@ if ($acao === 'apagar') {
         DELETE FROM conversas
         WHERE id_conversa         = :id
           AND id_configuracao_bot = :bot
-          AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+          AND (id_utilizador = :uid OR (:uid2::text IS NULL AND id_utilizador IS NULL))
     ");
     $stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
 
@@ -88,7 +87,7 @@ if ($acao === 'carregar') {
         SELECT id_sessao FROM conversas
         WHERE id_conversa         = :id
           AND id_configuracao_bot = :bot
-          AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+          AND (id_utilizador = :uid OR (:uid2::text IS NULL AND id_utilizador IS NULL))
     ");
     $stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
     $conversa = $stmt->fetch();
