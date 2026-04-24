@@ -255,7 +255,7 @@ $ultimos_docs = $stmt->fetchAll();
         </a>
         <a href="perfil.php"     class="btn-acao">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="4" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M1 13c0-3 2.7-4 6-4s6 1 6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            Editar perfil
+            Editar dados do criador
         </a>
         <a href="index.php"      class="btn-acao">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 3h10M2 7h7M2 11h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>

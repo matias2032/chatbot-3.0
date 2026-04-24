@@ -8,9 +8,9 @@ require_once 'configuracao.php';
 require_once 'conexao.php';
 
 // Exige sessão activa
-exigirLogin();
+iniciarSessao();
 $utilizador    = utilizadorActual();
-$id_utilizador = $utilizador['id_utilizador'];
+$id_utilizador = $utilizador['id_utilizador'] ?? null;
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') respostaJson(false, null, 'Método não permitido.');
 
@@ -24,16 +24,15 @@ if ($id_sessao === '') respostaJson(false, null, 'Sessão inválida.');
 $pdo = obterConexao();
 
 // ------------------------------------------------------------
-// 1. Obtém ou cria conversa — sempre associada ao utilizador logado
+// 1. Obtém ou cria conversa
 // ------------------------------------------------------------
 $stmt = $pdo->prepare("
     SELECT id_conversa FROM conversas
-    WHERE id_sessao = :s
-      AND id_configuracao_bot = :bot
-      AND id_utilizador = :uid
+    WHERE id_sessao = :s AND id_configuracao_bot = :bot
+      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
     LIMIT 1
 ");
-$stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
+$stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
 $conversa = $stmt->fetch();
 
 if (!$conversa) {

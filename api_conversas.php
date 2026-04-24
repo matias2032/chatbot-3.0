@@ -8,10 +8,9 @@ require_once 'configuracao.php';
 require_once 'conexao.php';
 
 // Todas as acções exigem sessão activa
-exigirLogin();
-
-$utilizador = utilizadorActual();
-$id_utilizador = $utilizador['id_utilizador'];
+iniciarSessao();
+$utilizador    = utilizadorActual();
+$id_utilizador = $utilizador['id_utilizador'] ?? null;
 
 $pdo  = obterConexao();
 $acao = $_GET['acao'] ?? '';
@@ -43,13 +42,13 @@ if ($acao === 'apagar') {
     if (!$id) respostaJson(false, null, 'ID em falta.');
 
     // Só apaga se pertencer ao utilizador logado E ao bot correcto
-    $stmt = $pdo->prepare("
-        DELETE FROM conversas
-        WHERE id_conversa       = :id
-          AND id_configuracao_bot = :bot
-          AND id_utilizador     = :uid
-    ");
-    $stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
+  $stmt = $pdo->prepare("
+    DELETE FROM conversas
+    WHERE id_conversa         = :id
+      AND id_configuracao_bot = :bot
+      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+");
+$stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
 
     respostaJson(true, ['apagado' => $stmt->rowCount() > 0]);
 }
@@ -61,13 +60,13 @@ if ($acao === 'carregar') {
     if (!$id_conversa) respostaJson(false, null, 'ID em falta.');
 
     // Confirma que a conversa pertence ao utilizador logado E a este bot
-    $stmt = $pdo->prepare("
-        SELECT id_sessao FROM conversas
-        WHERE id_conversa       = :id
-          AND id_configuracao_bot = :bot
-          AND id_utilizador     = :uid
-    ");
-    $stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
+$stmt = $pdo->prepare("
+    SELECT id_sessao FROM conversas
+    WHERE id_conversa         = :id
+      AND id_configuracao_bot = :bot
+      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+");
+$stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
     $conversa = $stmt->fetch();
 
     if (!$conversa) respostaJson(false, null, 'Conversa não encontrada.');
