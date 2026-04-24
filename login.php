@@ -41,7 +41,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute([':email' => $email]);
         $utilizador = $stmt->fetch();
 
-        // Verificar credenciais sem revelar se o email existe
         if (!$utilizador || !password_verify($senha, $utilizador['senha_hash'])) {
             $erro = 'Credenciais inválidas.';
         } elseif (!$utilizador['ativo']) {
@@ -54,6 +53,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['nome']          = $utilizador['nome'];
             $_SESSION['email']         = $utilizador['email'];
             $_SESSION['perfil']        = $utilizador['perfil'];
+
+            // ── Guarda sessão anónima para migração ──────────
+            $id_sessao_anonimo = trim($_POST['id_sessao_anonimo'] ?? '');
+            if ($id_sessao_anonimo !== '') {
+                $_SESSION['migrar_sessao'] = $id_sessao_anonimo;
+            }
 
             header('Location: index.php');
             exit;
@@ -127,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         .btn-auth {
             width: 100%; padding: 0.75rem;
-            background: var(--cor-acento); color: #fff;
+            background: var(--cor-acento); color: #000;
             border: none; border-radius: var(--raio-sm);
             font-family: var(--fonte-ui); font-size: 14px; font-weight: 600;
             cursor: pointer; margin-top: 0.5rem;
@@ -143,8 +148,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 0.7rem 1rem; border-radius: var(--raio-sm);
             font-size: 13px; margin-bottom: 1.2rem;
         }
-        .alerta-erro   { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--cor-erro); }
-        .alerta-sucesso { background: rgba(74,222,128,0.1); border: 1px solid rgba(74,222,128,0.3); color: var(--cor-sucesso); }
+        .alerta-erro    { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--cor-erro); }
+        .alerta-sucesso { background: rgba(74,222,128,0.1);  border: 1px solid rgba(74,222,128,0.3);  color: var(--cor-sucesso); }
     </style>
 </head>
 <body>
@@ -173,6 +178,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php endif; ?>
 
     <form method="POST" action="login.php" novalidate>
+
+        <!-- ── Campo oculto para migração de sessão anónima ── -->
+        <input type="hidden" id="id_sessao_anonimo" name="id_sessao_anonimo" value="">
+
         <div class="campo-grupo">
             <label for="email">Email</label>
             <input
@@ -199,6 +208,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         Ainda não tens conta? <a href="registo.php">Criar conta</a>
     </p>
 </div>
+
+<!-- Preenche o campo oculto com o id_sessao anónimo guardado -->
+<script>
+    const sessaoAnonima = localStorage.getItem('chat_id_sessao');
+    if (sessaoAnonima) {
+        document.getElementById('id_sessao_anonimo').value = sessaoAnonima;
+    }
+</script>
 
 </body>
 </html>

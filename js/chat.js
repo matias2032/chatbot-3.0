@@ -1,31 +1,65 @@
 // ============================================================
-//  CHAT.JS — Gestão de conversas + persistência ao recarregar
+//  CHAT.JS — Gestão de conversas + suporte a utilizadores
+//            anónimos e migração pós-login
 // ============================================================
 
 // ── Estado global ────────────────────────────────────────────
-let ID_SESSAO    = null;
-let ID_CONVERSA  = null;
+let ID_SESSAO   = null;
+let ID_CONVERSA = null;
 
 // ── Referências DOM ──────────────────────────────────────────
-const janela       = document.getElementById('janela-mensagens');
-const campo        = document.getElementById('campo-mensagem');
-const btnEnviar    = document.getElementById('btn-enviar');
-const btnLimpar    = document.getElementById('btn-limpar');
-const indicador    = document.getElementById('indicador-digitacao');
-const listaChats   = document.getElementById('lista-chats');
-const btnNovoChat  = document.getElementById('btn-novo-chat');
+const janela      = document.getElementById('janela-mensagens');
+const campo       = document.getElementById('campo-mensagem');
+const btnEnviar   = document.getElementById('btn-enviar');
+const btnLimpar   = document.getElementById('btn-limpar');
+const indicador   = document.getElementById('indicador-digitacao');
+const listaChats  = document.getElementById('lista-chats');
+const btnNovoChat = document.getElementById('btn-novo-chat');
 
 // ============================================================
-// INICIALIZAÇÃO — restaura conversa activa ao carregar a página
+// INICIALIZAÇÃO
 // ============================================================
 document.addEventListener('DOMContentLoaded', async () => {
-    const idSalvo = localStorage.getItem('chatbot_id_conversa');
+
+    // ── 1. Migração pós-login ────────────────────────────────
+    if (UTILIZADOR_LOGADO && typeof MIGRAR_SESSAO === 'string' && MIGRAR_SESSAO) {
+        try {
+            const res = await fetch('api_conversas.php?acao=migrar', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ id_sessao: MIGRAR_SESSAO }),
+            });
+            const dados = await res.json();
+
+            if (dados.sucesso && dados.dados.migrado) {
+                // Limpa vestígios anónimos do localStorage
+                localStorage.removeItem('chat_id_sessao');
+                localStorage.removeItem('chat_id_conversa');
+                // Guarda já como conversa do utilizador logado
+                localStorage.setItem('chatbot_id_conversa', dados.dados.id_conversa);
+                // Carrega a conversa migrada
+                await carregarConversa(dados.dados.id_conversa, false);
+                destacarItemActivo();
+                console.log('[Chat] Sessão anónima migrada:', dados.dados.id_conversa);
+                return; // não precisa de restaurar mais nada
+            }
+        } catch (e) {
+            console.warn('[Chat] Falha na migração:', e);
+        }
+    }
+
+    // ── 2. Restaurar conversa guardada ───────────────────────
+    const chave   = UTILIZADOR_LOGADO ? 'chatbot_id_conversa' : 'chat_id_conversa';
+    const idSalvo = localStorage.getItem(chave);
 
     if (idSalvo) {
-        // Tenta carregar a conversa guardada
         await carregarConversa(idSalvo, false);
+
+        // Se é anónimo, restaura também o ID_SESSAO do localStorage
+        if (!UTILIZADOR_LOGADO && !ID_SESSAO) {
+            ID_SESSAO = localStorage.getItem('chat_id_sessao');
+        }
     }
-    // Se não houver conversa salva, mostra apenas a mensagem de boas-vindas
 
     destacarItemActivo();
 });
@@ -35,13 +69,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ============================================================
 async function carregarConversa(idConversa, limparPrimeiro = true) {
     try {
-        const resp = await fetch(`api_conversas.php?acao=carregar&id_conversa=${idConversa}`);
+        const resp  = await fetch(`api_conversas.php?acao=carregar&id_conversa=${idConversa}`);
         const dados = await resp.json();
 
         if (!dados.sucesso || !dados.dados.mensagens.length) {
-            // Conversa vazia ou não encontrada — começa do zero
-            if (idConversa === localStorage.getItem('chatbot_id_conversa')) {
-                localStorage.removeItem('chatbot_id_conversa');
+            // Conversa vazia ou não encontrada — limpa o localStorage
+            const chave = UTILIZADOR_LOGADO ? 'chatbot_id_conversa' : 'chat_id_conversa';
+            if (idConversa === localStorage.getItem(chave)) {
+                localStorage.removeItem(chave);
             }
             return;
         }
@@ -54,8 +89,12 @@ async function carregarConversa(idConversa, limparPrimeiro = true) {
         ID_CONVERSA = dados.dados.id_conversa;
         ID_SESSAO   = dados.dados.id_sessao;
 
-        // Guarda no localStorage para persistir ao recarregar
-        localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+        // Persiste a conversa activa
+        const chave = UTILIZADOR_LOGADO ? 'chatbot_id_conversa' : 'chat_id_conversa';
+        localStorage.setItem(chave, ID_CONVERSA);
+        if (!UTILIZADOR_LOGADO) {
+            localStorage.setItem('chat_id_sessao', ID_SESSAO);
+        }
 
         // Renderiza todas as mensagens
         for (const msg of dados.dados.mensagens) {
@@ -72,15 +111,9 @@ async function carregarConversa(idConversa, limparPrimeiro = true) {
 }
 
 // ============================================================
-// NOVA CONVERSA — cria no servidor e limpa o ecrã
+// NOVA CONVERSA
 // ============================================================
 async function novaConversa() {
-    // Redireciona se não estiver logado
-    if (typeof UTILIZADOR_LOGADO !== 'undefined' && !UTILIZADOR_LOGADO) {
-        window.location.href = 'login.php';
-        return;
-    }
-
     try {
         const resp  = await fetch('api_conversas.php?acao=criar');
         const dados = await resp.json();
@@ -90,12 +123,19 @@ async function novaConversa() {
         ID_CONVERSA = dados.dados.id_conversa;
         ID_SESSAO   = dados.dados.id_sessao;
 
-        localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+        if (UTILIZADOR_LOGADO) {
+            // Logado: persiste e adiciona à sidebar
+            localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+            adicionarItemSidebar(dados.dados);
+            destacarItemActivo();
+        } else {
+            // Anónimo: guarda só para migração futura
+            localStorage.setItem('chat_id_sessao',   ID_SESSAO);
+            localStorage.setItem('chat_id_conversa', ID_CONVERSA);
+        }
 
         limparJanela();
         mostrarBoasVindas();
-        adicionarItemSidebar(dados.dados);
-        destacarItemActivo();
 
     } catch (e) {
         console.error('Erro ao criar conversa:', e);
@@ -131,7 +171,7 @@ async function apagarConversa(idConversa) {
         }
 
         // Mostra "sem conversas" se a lista ficou vazia
-        if (!listaChats.querySelector('.item-chat')) {
+        if (listaChats && !listaChats.querySelector('.item-chat')) {
             listaChats.innerHTML = '<p class="sem-chats">Nenhuma conversa ainda</p>';
         }
 
@@ -144,15 +184,16 @@ async function apagarConversa(idConversa) {
 // SIDEBAR — adicionar item dinamicamente
 // ============================================================
 function adicionarItemSidebar(conversa) {
+    if (!listaChats) return;
     listaChats.querySelector('.sem-chats')?.remove();
 
     const data = new Date().toLocaleString('pt-PT', {
         day: '2-digit', month: '2-digit',
-        hour: '2-digit', minute: '2-digit'
+        hour: '2-digit', minute: '2-digit',
     });
 
     const div = document.createElement('div');
-    div.className  = 'item-chat';
+    div.className      = 'item-chat';
     div.dataset.id     = conversa.id_conversa;
     div.dataset.sessao = conversa.id_sessao;
     div.innerHTML = `
@@ -176,6 +217,7 @@ function adicionarItemSidebar(conversa) {
 }
 
 function actualizarTituloSidebar(texto) {
+    if (!listaChats) return;
     const activo = listaChats.querySelector('.item-chat.activo .item-chat-titulo');
     if (activo && activo.textContent === 'Nova conversa') {
         activo.textContent = texto.length > 35 ? texto.slice(0, 35) + '…' : texto;
@@ -183,6 +225,7 @@ function actualizarTituloSidebar(texto) {
 }
 
 function destacarItemActivo() {
+    if (!listaChats) return;
     listaChats.querySelectorAll('.item-chat').forEach(el => {
         el.classList.toggle('activo', el.dataset.id === ID_CONVERSA);
     });
@@ -207,7 +250,6 @@ function bindItemChat(el) {
 // Bind nos itens já existentes no HTML (só existem se logado)
 document.querySelectorAll('.item-chat').forEach(bindItemChat);
 
-// Botões principais (só faz bind se os elementos existirem)
 if (btnNovoChat) btnNovoChat.addEventListener('click', novaConversa);
 if (btnLimpar)   btnLimpar.addEventListener('click', novaConversa);
 if (btnEnviar)   btnEnviar.addEventListener('click', enviarMensagem);
@@ -296,7 +338,7 @@ function horaFormatada(dataStr) {
 function adicionarMensagem(texto, tipo = 'bot', mostrarHora = true, dataStr = null) {
     if (tipo === 'user') document.getElementById('msg-boas-vindas')?.remove();
 
-    const div  = document.createElement('div');
+    const div = document.createElement('div');
     div.className = `mensagem mensagem-${tipo}`;
 
     const hora = mostrarHora
@@ -346,23 +388,19 @@ function rolarParaBaixo()    { setTimeout(() => { janela.scrollTop = janela.scro
 // ENVIAR MENSAGEM
 // ============================================================
 async function enviarMensagem() {
-    // Redireciona se não estiver logado
-    if (typeof UTILIZADOR_LOGADO !== 'undefined' && !UTILIZADOR_LOGADO) {
-        window.location.href = 'login.php';
-        return;
-    }
-
     const texto = campo.value.trim();
     if (!texto) return;
 
+    // Cria conversa automaticamente se ainda não existir
     if (!ID_SESSAO) {
         await novaConversa();
+        if (!ID_SESSAO) return; // falhou a criar — aborta
     }
 
     campo.value = '';
     campo.style.height = 'auto';
     btnEnviar.disabled = true;
-    campo.disabled = true;
+    campo.disabled     = true;
 
     adicionarMensagem(texto, 'user');
     actualizarTituloSidebar(texto);
@@ -381,16 +419,26 @@ async function enviarMensagem() {
         if (dados.sucesso) {
             if (dados.dados.id_conversa) {
                 ID_CONVERSA = dados.dados.id_conversa;
-                localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+
+                if (UTILIZADOR_LOGADO) {
+                    localStorage.setItem('chatbot_id_conversa', ID_CONVERSA);
+                } else {
+                    // Anónimo: mantém ambas as chaves para migração futura
+                    localStorage.setItem('chat_id_sessao',   ID_SESSAO);
+                    localStorage.setItem('chat_id_conversa', ID_CONVERSA);
+                }
+
                 destacarItemActivo();
             }
+
             adicionarMensagem(dados.dados.resposta, 'bot');
 
-            const metaActivo = listaChats.querySelector('.item-chat.activo .item-chat-meta');
+            // Actualiza contador de mensagens na sidebar
+            const metaActivo = listaChats?.querySelector('.item-chat.activo .item-chat-meta');
             if (metaActivo) {
                 const match = metaActivo.textContent.match(/(\d+) msgs/);
                 if (match) {
-                    const novaContagem = parseInt(match[1]) + 2; 
+                    const novaContagem = parseInt(match[1]) + 2;
                     metaActivo.textContent = metaActivo.textContent.replace(/\d+ msgs/, `${novaContagem} msgs`);
                 }
             }

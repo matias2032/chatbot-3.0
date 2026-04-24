@@ -1,13 +1,12 @@
 <?php
 // ============================================================
-//  API_CONVERSAS.PHP — Criar, apagar e carregar conversas
+//  API_CONVERSAS.PHP — Criar, apagar, carregar e migrar conversas
 // ============================================================
 
 require_once 'auth.php';
 require_once 'configuracao.php';
 require_once 'conexao.php';
 
-// Todas as acções exigem sessão activa
 iniciarSessao();
 $utilizador    = utilizadorActual();
 $id_utilizador = $utilizador['id_utilizador'] ?? null;
@@ -15,7 +14,7 @@ $id_utilizador = $utilizador['id_utilizador'] ?? null;
 $pdo  = obterConexao();
 $acao = $_GET['acao'] ?? '';
 
-// ── CRIAR nova conversa ──────────────────────────────────────
+// ── CRIAR nova conversa (permitido sem login) ────────────────
 if ($acao === 'criar') {
     $id_sessao = 'sess_' . time() . '_' . bin2hex(random_bytes(4));
 
@@ -34,6 +33,33 @@ if ($acao === 'criar') {
     ]);
 }
 
+// ── MIGRAR conversa anónima para utilizador logado ───────────
+if ($acao === 'migrar') {
+    if (!$id_utilizador) respostaJson(false, null, 'Não autenticado.');
+
+    $corpo     = json_decode(file_get_contents('php://input'), true);
+    $id_sessao = trim($corpo['id_sessao'] ?? '');
+
+    if (!$id_sessao) respostaJson(false, null, 'Sessão inválida.');
+
+    // Só migra conversas que ainda não têm utilizador associado
+    $stmt = $pdo->prepare("
+        UPDATE conversas
+        SET id_utilizador = :uid
+        WHERE id_sessao           = :s
+          AND id_configuracao_bot = :bot
+          AND id_utilizador IS NULL
+        RETURNING id_conversa
+    ");
+    $stmt->execute([':uid' => $id_utilizador, ':s' => $id_sessao, ':bot' => BOT_ID]);
+    $migrada = $stmt->fetch();
+
+    respostaJson(true, [
+        'migrado'     => (bool)$migrada,
+        'id_conversa' => $migrada['id_conversa'] ?? null,
+    ]);
+}
+
 // ── APAGAR conversa ──────────────────────────────────────────
 if ($acao === 'apagar') {
     $corpo = json_decode(file_get_contents('php://input'), true);
@@ -41,14 +67,13 @@ if ($acao === 'apagar') {
 
     if (!$id) respostaJson(false, null, 'ID em falta.');
 
-    // Só apaga se pertencer ao utilizador logado E ao bot correcto
-  $stmt = $pdo->prepare("
-    DELETE FROM conversas
-    WHERE id_conversa         = :id
-      AND id_configuracao_bot = :bot
-      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
-");
-$stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
+    $stmt = $pdo->prepare("
+        DELETE FROM conversas
+        WHERE id_conversa         = :id
+          AND id_configuracao_bot = :bot
+          AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+    ");
+    $stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
 
     respostaJson(true, ['apagado' => $stmt->rowCount() > 0]);
 }
@@ -59,14 +84,13 @@ if ($acao === 'carregar') {
 
     if (!$id_conversa) respostaJson(false, null, 'ID em falta.');
 
-    // Confirma que a conversa pertence ao utilizador logado E a este bot
-$stmt = $pdo->prepare("
-    SELECT id_sessao FROM conversas
-    WHERE id_conversa         = :id
-      AND id_configuracao_bot = :bot
-      AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
-");
-$stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
+    $stmt = $pdo->prepare("
+        SELECT id_sessao FROM conversas
+        WHERE id_conversa         = :id
+          AND id_configuracao_bot = :bot
+          AND (id_utilizador = :uid OR (:uid2 IS NULL AND id_utilizador IS NULL))
+    ");
+    $stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador, ':uid2' => $id_utilizador]);
     $conversa = $stmt->fetch();
 
     if (!$conversa) respostaJson(false, null, 'Conversa não encontrada.');

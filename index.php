@@ -341,7 +341,7 @@ if ($logado) {
             <textarea
                 id="campo-mensagem"
                 class="campo-mensagem"
-                placeholder="<?= $logado ? 'Escreve a tua mensagem...' : 'Entra na conta para guardar as tuas conversas...' ?>"
+                placeholder="Escreve a tua mensagem..."
                 rows="1"
                 maxlength="2000"
             ></textarea>
@@ -353,7 +353,8 @@ if ($logado) {
         </div>
         <p class="aviso-rodape">
             <?php if (!$logado): ?>
-                <a href="login.php" style="color: var(--cor-acento); text-decoration: none;">Entra na conta</a> para guardar o histórico das tuas conversas.
+                <a href="login.php" style="color: var(--cor-acento); text-decoration: none;">Entra na conta</a>
+                para guardar o histórico das tuas conversas.
             <?php else: ?>
                 As respostas baseiam-se no conhecimento configurado.
             <?php endif; ?>
@@ -362,8 +363,13 @@ if ($logado) {
 </main>
 
 <script>
-    // Passa o estado de autenticação para o JS
     const UTILIZADOR_LOGADO = <?= $logado ? 'true' : 'false' ?>;
+    <?php if ($logado && isset($_SESSION['migrar_sessao'])): ?>
+    const MIGRAR_SESSAO = <?= json_encode($_SESSION['migrar_sessao']) ?>;
+    <?php unset($_SESSION['migrar_sessao']); ?>
+    <?php else: ?>
+    const MIGRAR_SESSAO = null;
+    <?php endif; ?>
 </script>
 <script src="js/chat.js"></script>
 </body>
