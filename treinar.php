@@ -1,18 +1,9 @@
 <?php
-// ============================================================
-//  TREINAR.PHP — Adicionar e gerir conhecimento manual
-// ============================================================
-
+require_once 'auth.php';
 require_once 'configuracao.php';
 require_once 'conexao.php';
 
-session_start();
-
-// Protecção — redireciona se não autenticado
-if (empty($_SESSION['admin_autenticado'])) {
-    header('Location: admin.php');
-    exit;
-}
+exigirAdmin();
 
 $pdo = obterConexao();
 
@@ -212,7 +203,7 @@ $categorias = $stmt->fetchAll(PDO::FETCH_COLUMN);
         </a>
     </nav>
     <div class="rodape-lateral">
-        <a href="admin.php?sair=1" style="font-size:12px;color:var(--cor-erro);text-decoration:none;">Terminar sessão</a>
+        <a href="logout.php" style="font-size:12px;color:var(--cor-erro);text-decoration:none;">Terminar sessão</a>
     </div>
 </aside>
 
