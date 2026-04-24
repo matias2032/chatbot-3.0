@@ -3,22 +3,29 @@
 //  API_CONVERSAS.PHP — Criar, apagar e carregar conversas
 // ============================================================
 
+require_once 'auth.php';
 require_once 'configuracao.php';
 require_once 'conexao.php';
 
-$pdo    = obterConexao();
-$acao   = $_GET['acao'] ?? '';
+// Todas as acções exigem sessão activa
+exigirLogin();
+
+$utilizador = utilizadorActual();
+$id_utilizador = $utilizador['id_utilizador'];
+
+$pdo  = obterConexao();
+$acao = $_GET['acao'] ?? '';
 
 // ── CRIAR nova conversa ──────────────────────────────────────
 if ($acao === 'criar') {
     $id_sessao = 'sess_' . time() . '_' . bin2hex(random_bytes(4));
 
     $stmt = $pdo->prepare("
-        INSERT INTO conversas (id_configuracao_bot, id_sessao)
-        VALUES (:bot, :s)
+        INSERT INTO conversas (id_configuracao_bot, id_sessao, id_utilizador)
+        VALUES (:bot, :s, :uid)
         RETURNING id_conversa, id_sessao, iniciada_em
     ");
-    $stmt->execute([':bot' => BOT_ID, ':s' => $id_sessao]);
+    $stmt->execute([':bot' => BOT_ID, ':s' => $id_sessao, ':uid' => $id_utilizador]);
     $nova = $stmt->fetch();
 
     respostaJson(true, [
@@ -35,12 +42,14 @@ if ($acao === 'apagar') {
 
     if (!$id) respostaJson(false, null, 'ID em falta.');
 
-    // Cascata configurada na BD — apaga mensagens e fontes automaticamente
+    // Só apaga se pertencer ao utilizador logado E ao bot correcto
     $stmt = $pdo->prepare("
         DELETE FROM conversas
-        WHERE id_conversa = :id AND id_configuracao_bot = :bot
+        WHERE id_conversa       = :id
+          AND id_configuracao_bot = :bot
+          AND id_utilizador     = :uid
     ");
-    $stmt->execute([':id' => $id, ':bot' => BOT_ID]);
+    $stmt->execute([':id' => $id, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
 
     respostaJson(true, ['apagado' => $stmt->rowCount() > 0]);
 }
@@ -51,12 +60,14 @@ if ($acao === 'carregar') {
 
     if (!$id_conversa) respostaJson(false, null, 'ID em falta.');
 
-    // Confirma que a conversa pertence a este bot
+    // Confirma que a conversa pertence ao utilizador logado E a este bot
     $stmt = $pdo->prepare("
         SELECT id_sessao FROM conversas
-        WHERE id_conversa = :id AND id_configuracao_bot = :bot
+        WHERE id_conversa       = :id
+          AND id_configuracao_bot = :bot
+          AND id_utilizador     = :uid
     ");
-    $stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID]);
+    $stmt->execute([':id' => $id_conversa, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
     $conversa = $stmt->fetch();
 
     if (!$conversa) respostaJson(false, null, 'Conversa não encontrada.');

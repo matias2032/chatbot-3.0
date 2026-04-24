@@ -3,9 +3,14 @@
 //  INDEX.PHP — Interface pública do chatbot com gestão de chats
 // ============================================================
 
+require_once 'auth.php';
 require_once 'configuracao.php';
 require_once 'conexao.php';
 
+// Redireciona para login se não estiver autenticado
+exigirLogin();
+
+$utilizador = utilizadorActual();
 $pdo = obterConexao();
 
 // Busca dados do perfil e bot
@@ -25,7 +30,7 @@ $descricao_bot = $info['descricao']     ?? 'Assistente inteligente';
 $nome_criador  = $info['nome_completo'] ?? '';
 $profissao     = $info['profissao']     ?? '';
 
-// Busca todas as conversas do bot para listagem na sidebar
+// Busca apenas as conversas do utilizador logado
 $stmt = $pdo->prepare("
     SELECT c.id_conversa, c.id_sessao, c.iniciada_em, c.ultima_mensagem_em,
            COUNT(m.id_mensagem) AS total_msgs,
@@ -35,10 +40,11 @@ $stmt = $pdo->prepare("
     FROM conversas c
     LEFT JOIN mensagens m ON m.id_conversa = c.id_conversa
     WHERE c.id_configuracao_bot = :bot
+      AND c.id_utilizador = :uid
     GROUP BY c.id_conversa, c.id_sessao, c.iniciada_em, c.ultima_mensagem_em
     ORDER BY c.ultima_mensagem_em DESC
 ");
-$stmt->execute([':bot' => BOT_ID]);
+$stmt->execute([':bot' => BOT_ID, ':uid' => $utilizador['id_utilizador']]);
 $conversas = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
@@ -97,6 +103,34 @@ $conversas = $stmt->fetchAll();
         .btn-apagar-chat:hover { background: rgba(248,113,113,0.15); }
 
         .sem-chats { font-size: 0.75rem; opacity: 0.3; text-align: center; padding: 1rem 0; }
+
+        /* ── Área de utilizador na sidebar ── */
+        .utilizador-lateral {
+            background: var(--cor-fundo-3);
+            border: 1px solid var(--cor-borda);
+            border-radius: var(--raio-sm);
+            padding: 10px 12px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .utilizador-avatar {
+            width: 30px; height: 30px;
+            border-radius: 50%;
+            background: var(--cor-acento-suave);
+            border: 1px solid var(--cor-borda-forte);
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+            font-size: 12px; font-weight: 600; color: var(--cor-acento);
+        }
+        .utilizador-info { flex: 1; min-width: 0; }
+        .utilizador-nome { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .utilizador-perfil { font-size: 10px; color: var(--cor-texto-3); text-transform: capitalize; }
+        .btn-logout {
+            background: none; border: none; cursor: pointer;
+            color: var(--cor-texto-3); padding: 4px;
+            border-radius: 4px; transition: color 0.15s, background 0.15s;
+            flex-shrink: 0;
+        }
+        .btn-logout:hover { color: var(--cor-erro); background: rgba(248,113,113,0.1); }
     </style>
 </head>
 <body>
@@ -129,6 +163,22 @@ $conversas = $stmt->fetchAll();
         <?php endif; ?>
     </div>
     <?php endif; ?>
+
+    <!-- ── Informação do utilizador logado ── -->
+    <div class="utilizador-lateral">
+        <div class="utilizador-avatar">
+            <?= htmlspecialchars(mb_strtoupper(mb_substr($utilizador['nome'], 0, 1))) ?>
+        </div>
+        <div class="utilizador-info">
+            <div class="utilizador-nome"><?= htmlspecialchars($utilizador['nome']) ?></div>
+            <div class="utilizador-perfil"><?= htmlspecialchars($utilizador['perfil']) ?></div>
+        </div>
+        <a href="logout.php" class="btn-logout" title="Terminar sessão">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M5 2H2.5A1.5 1.5 0 001 3.5v7A1.5 1.5 0 002.5 12H5M9 10l3-3-3-3M13 7H5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
+    </div>
 
     <!-- ── Gestão de Chats ── -->
     <div class="seccao-chats">
@@ -172,10 +222,17 @@ $conversas = $stmt->fetchAll();
     </div>
 
     <nav class="nav-lateral">
+        <?php if (eAdmin()): ?>
         <a href="admin.php" class="nav-item">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
             Painel Admin
         </a>
+        <?php endif; ?>
     </nav>
 
     <div class="rodape-lateral">
@@ -197,17 +254,22 @@ $conversas = $stmt->fetchAll();
             </div>
         </div>
         <button class="btn-limpar" id="btn-limpar" title="Nova conversa">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
         </button>
     </header>
 
     <div class="janela-mensagens" id="janela-mensagens">
         <div class="mensagem mensagem-bot" id="msg-boas-vindas">
             <div class="avatar-bot">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="var(--cor-acento)" stroke-width="1.2"/><circle cx="9" cy="9" r="2" fill="var(--cor-acento)"/></svg>
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <circle cx="9" cy="9" r="8" stroke="var(--cor-acento)" stroke-width="1.2"/>
+                    <circle cx="9" cy="9" r="2" fill="var(--cor-acento)"/>
+                </svg>
             </div>
             <div class="balao">
-                <p>Olá! Sou o <strong><?= htmlspecialchars($nome_bot) ?></strong>. Como posso ajudar?</p>
+                <p>Olá, <strong><?= htmlspecialchars($utilizador['nome']) ?></strong>! Sou o <strong><?= htmlspecialchars($nome_bot) ?></strong>. Como posso ajudar?</p>
                 <div class="sugestoes">
                     <button class="sugestao" onclick="usarSugestao(this)">Quem te criou?</button>
                     <button class="sugestao" onclick="usarSugestao(this)">O que sabes fazer?</button>
@@ -219,7 +281,10 @@ $conversas = $stmt->fetchAll();
 
     <div class="indicador-digitacao" id="indicador-digitacao" style="display:none">
         <div class="avatar-bot">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="8" stroke="var(--cor-acento)" stroke-width="1.2"/><circle cx="9" cy="9" r="2" fill="var(--cor-acento)"/></svg>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <circle cx="9" cy="9" r="8" stroke="var(--cor-acento)" stroke-width="1.2"/>
+                <circle cx="9" cy="9" r="2" fill="var(--cor-acento)"/>
+            </svg>
         </div>
         <div class="balao balao-digitacao">
             <span></span><span></span><span></span>

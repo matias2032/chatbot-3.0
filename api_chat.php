@@ -3,8 +3,14 @@
 //  API_CHAT.PHP — RAG corrigido: busca genérica em fragmentos
 // ============================================================
 
+require_once 'auth.php';
 require_once 'configuracao.php';
 require_once 'conexao.php';
+
+// Exige sessão activa
+exigirLogin();
+$utilizador    = utilizadorActual();
+$id_utilizador = $utilizador['id_utilizador'];
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') respostaJson(false, null, 'Método não permitido.');
 
@@ -18,21 +24,24 @@ if ($id_sessao === '') respostaJson(false, null, 'Sessão inválida.');
 $pdo = obterConexao();
 
 // ------------------------------------------------------------
-// 1. Obtém ou cria conversa
+// 1. Obtém ou cria conversa — sempre associada ao utilizador logado
 // ------------------------------------------------------------
 $stmt = $pdo->prepare("
     SELECT id_conversa FROM conversas
-    WHERE id_sessao=:s AND id_configuracao_bot=:bot LIMIT 1
+    WHERE id_sessao = :s
+      AND id_configuracao_bot = :bot
+      AND id_utilizador = :uid
+    LIMIT 1
 ");
-$stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID]);
+$stmt->execute([':s' => $id_sessao, ':bot' => BOT_ID, ':uid' => $id_utilizador]);
 $conversa = $stmt->fetch();
 
 if (!$conversa) {
     $stmt = $pdo->prepare("
-        INSERT INTO conversas (id_configuracao_bot, id_sessao)
-        VALUES (:bot, :s) RETURNING id_conversa
+        INSERT INTO conversas (id_configuracao_bot, id_sessao, id_utilizador)
+        VALUES (:bot, :s, :uid) RETURNING id_conversa
     ");
-    $stmt->execute([':bot' => BOT_ID, ':s' => $id_sessao]);
+    $stmt->execute([':bot' => BOT_ID, ':s' => $id_sessao, ':uid' => $id_utilizador]);
     $id_conversa = $stmt->fetchColumn();
 } else {
     $id_conversa = $conversa['id_conversa'];
@@ -133,16 +142,12 @@ foreach ($conhecimentos as $k) {
 }
 
 // ── 3b. FRAGMENTOS DE DOCUMENTOS ─────────────────────────────
-// 4 estratégias em cascata — genéricas para qualquer pergunta.
-// NOTA: A query hardcoded para "Artigo 3" foi removida — era um artefacto
-//       de teste que impedia qualquer outra pesquisa de funcionar.
-
 $restantes = MAX_RESULTADOS_BUSCA - count($contexto_partes);
 
 if ($restantes > 0) {
     $fragmentos = [];
 
-    // Estratégia 1: websearch_to_tsquery (mais tolerante, suporta frases)
+    // Estratégia 1: websearch_to_tsquery
     if (empty($fragmentos)) {
         try {
             $stmt = $pdo->prepare("
@@ -163,7 +168,6 @@ if ($restantes > 0) {
             $stmt->execute([':bot' => BOT_ID, ':q' => $mensagem, ':q2' => $mensagem, ':lim' => $restantes]);
             $fragmentos = $stmt->fetchAll();
         } catch (PDOException $e) {
-            // websearch_to_tsquery pode rejeitar certas entradas — passa para o seguinte
             error_log("[RAG] websearch_to_tsquery falhou: " . $e->getMessage());
             $fragmentos = [];
         }
@@ -196,7 +200,6 @@ if ($restantes > 0) {
     }
 
     // Estratégia 3: ILIKE por palavras-chave individuais
-    // Funciona mesmo quando o FTS falha (acentos, palavras curtas, etc.)
     if (empty($fragmentos)) {
         $palavras = array_slice(extrairPalavrasChave($mensagem), 0, 6);
         if (!empty($palavras)) {
@@ -222,8 +225,6 @@ if ($restantes > 0) {
     }
 
     // Estratégia 4: Primeiros fragmentos dos documentos mais recentes
-    // Garante sempre contexto quando há documentos prontos,
-    // mesmo para perguntas vagas como "o que diz o documento?"
     if (empty($fragmentos)) {
         $stmt = $pdo->prepare("
             SELECT f.id_fragmento, f.conteudo, d.nome_original, 0.1 AS r
@@ -265,7 +266,7 @@ $perfil = $stmt->fetch();
 // ------------------------------------------------------------
 // 5. Monta prompt de sistema
 // ------------------------------------------------------------
-$nome_bot_str   = $perfil['nome_bot']      ?? 'MeuBot';
+$nome_bot_str     = $perfil['nome_bot']      ?? 'MeuBot';
 $nome_criador_str = $perfil['nome_completo'] ?? 'o teu criador';
 
 $identidade  = "### IDENTIDADE (OBRIGATÓRIO)\n";

@@ -3,147 +3,28 @@
 //  ADMIN.PHP — Painel de administração
 // ============================================================
 
+require_once 'auth.php';        // sistema de sessões centralizado
 require_once 'configuracao.php';
 require_once 'conexao.php';
 
-session_start();
+
+exigirAdmin();
+
+$utilizador = utilizadorActual();
 
 // ------------------------------------------------------------
-// Processamento do login
-// ------------------------------------------------------------
-$erro_login = '';
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['senha'])) {
-    if ($_POST['senha'] === ADMIN_SENHA) {
-        $_SESSION['admin_autenticado'] = true;
-        $_SESSION['admin_desde']       = date('H:i');
-    } else {
-        $erro_login = 'Senha incorrecta. Tenta novamente.';
-    }
-}
-
-// Logout
-if (isset($_GET['sair'])) {
-    session_destroy();
-    header('Location: admin.php');
-    exit;
-}
-
-// ------------------------------------------------------------
-// Se não autenticado — mostra formulário de login
-// ------------------------------------------------------------
-if (empty($_SESSION['admin_autenticado'])):
-?>
-<!DOCTYPE html>
-<html lang="pt">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin — Entrar</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet">
-     <link rel="stylesheet" href="css/estilo.css">
-    <style>
-        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        .caixa-login {
-            width: 100%; max-width: 380px;
-            background: var(--cor-fundo-2);
-            border: 1px solid var(--cor-borda);
-            border-radius: var(--raio);
-            padding: 40px 36px;
-        }
-        .login-logo {
-            display: flex; align-items: center; gap: 10px;
-            margin-bottom: 32px;
-        }
-        .login-logo-icone {
-            width: 40px; height: 40px;
-            background: var(--cor-acento-suave);
-            border: 1px solid var(--cor-borda-forte);
-            border-radius: var(--raio-sm);
-            display: flex; align-items: center; justify-content: center;
-        }
-        .login-titulo { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
-        .login-subtitulo { font-size: 13px; color: var(--cor-texto-2); margin-bottom: 28px; }
-        .campo-grupo { margin-bottom: 16px; }
-        .campo-grupo label { display: block; font-size: 12px; font-weight: 500; color: var(--cor-texto-2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
-        .campo-grupo input {
-            width: 100%; padding: 10px 14px;
-            background: var(--cor-fundo-3);
-            border: 1px solid var(--cor-borda-forte);
-            border-radius: var(--raio-sm);
-            font-family: var(--fonte-ui); font-size: 14px;
-            color: var(--cor-texto); outline: none;
-            transition: border-color var(--transicao);
-        }
-        .campo-grupo input:focus { border-color: var(--cor-acento); box-shadow: 0 0 0 3px var(--cor-acento-suave); }
-        .btn-login {
-            width: 100%; padding: 11px;
-            background: var(--cor-acento); color: #fff;
-            border: none; border-radius: var(--raio-sm);
-            font-family: var(--fonte-ui); font-size: 14px; font-weight: 600;
-            cursor: pointer; transition: background var(--transicao);
-            margin-top: 8px;
-        }
-        .btn-login:hover { background: var(--cor-acento-hover); }
-        .erro-login {
-            background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3);
-            border-radius: var(--raio-sm); padding: 10px 14px;
-            font-size: 13px; color: var(--cor-erro); margin-bottom: 16px;
-        }
-        .link-voltar { display: block; text-align: center; margin-top: 20px; font-size: 13px; color: var(--cor-texto-3); text-decoration: none; }
-        .link-voltar:hover { color: var(--cor-acento); }
-    </style>
-</head>
-<body>
-    <div class="caixa-login">
-        <div class="login-logo">
-            <div class="login-logo-icone">
-                <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-                    <rect x="3" y="11" width="16" height="9" rx="2" stroke="var(--cor-acento)" stroke-width="1.5"/>
-                    <path d="M7 11V7a4 4 0 0 1 8 0v4" stroke="var(--cor-acento)" stroke-width="1.5" stroke-linecap="round"/>
-                    <circle cx="11" cy="15.5" r="1.5" fill="var(--cor-acento)"/>
-                </svg>
-            </div>
-            <span class="login-titulo">Área Admin</span>
-        </div>
-
-        <p class="login-subtitulo">Introduz a senha para aceder ao painel de gestão.</p>
-
-        <?php if ($erro_login): ?>
-        <div class="erro-login"><?= htmlspecialchars($erro_login) ?></div>
-        <?php endif; ?>
-
-        <form method="POST">
-            <div class="campo-grupo">
-                <label for="senha">Senha</label>
-                <input type="password" id="senha" name="senha" placeholder="••••••••" autofocus required>
-            </div>
-            <button type="submit" class="btn-login">Entrar</button>
-        </form>
-
-        <a href="index.php" class="link-voltar">← Voltar ao chat</a>
-    </div>
-</body>
-</html>
-<?php
-// Para aqui se não autenticado
-exit;
-endif;
-
-// ------------------------------------------------------------
-// A partir daqui — utilizador autenticado
+// A partir daqui — utilizador autenticado como admin
 // Carrega estatísticas
 // ------------------------------------------------------------
 $pdo  = obterConexao();
 $stmt = $pdo->prepare("SELECT * FROM v_estatisticas_bot WHERE id_configuracao_bot = :bot");
 $stmt->execute([':bot' => BOT_ID]);
 $stats = $stmt->fetch() ?: [
-    'nome_bot'             => 'Bot',
+    'nome_bot'              => 'Bot',
     'entradas_conhecimento' => 0,
-    'total_documentos'     => 0,
-    'total_conversas'      => 0,
-    'total_mensagens'      => 0,
+    'total_documentos'      => 0,
+    'total_conversas'       => 0,
+    'total_mensagens'       => 0,
 ];
 
 // Últimas 5 conversas
@@ -225,10 +106,10 @@ $ultimos_docs = $stmt->fetchAll();
 
         /* Badges de estado */
         .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }
-        .badge-pronto    { background: rgba(74,222,128,0.15); color: #4ade80; }
-        .badge-pendente  { background: rgba(251,191,36,0.15); color: #fbbf24; }
+        .badge-pronto    { background: rgba(74,222,128,0.15);  color: #4ade80; }
+        .badge-pendente  { background: rgba(251,191,36,0.15);  color: #fbbf24; }
         .badge-erro      { background: rgba(248,113,113,0.15); color: #f87171; }
-        .badge-processar { background: rgba(96,165,250,0.15); color: #60a5fa; }
+        .badge-processar { background: rgba(96,165,250,0.15);  color: #60a5fa; }
 
         /* Acções rápidas */
         .acoes-rapidas { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
@@ -244,9 +125,29 @@ $ultimos_docs = $stmt->fetchAll();
         .btn-acao-destaque { background: var(--cor-acento); border-color: var(--cor-acento); color: #fff; }
         .btn-acao-destaque:hover { background: var(--cor-acento-hover); color: #fff; }
 
+        /* Utilizador na sidebar */
+        .utilizador-lateral {
+            background: var(--cor-fundo-3);
+            border: 1px solid var(--cor-borda);
+            border-radius: var(--raio-sm);
+            padding: 10px 12px;
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 8px;
+        }
+        .utilizador-avatar {
+            width: 30px; height: 30px; border-radius: 50%;
+            background: var(--cor-acento-suave);
+            border: 1px solid var(--cor-borda-forte);
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--cor-acento);
+        }
+        .utilizador-info { flex: 1; min-width: 0; }
+        .utilizador-nome  { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .utilizador-perfil { font-size: 10px; color: var(--cor-texto-3); text-transform: capitalize; }
+
         @media (max-width: 900px) {
-            .grelha-stats { grid-template-columns: repeat(2, 1fr); }
-            .grelha-tabelas { grid-template-columns: 1fr; }
+            .grelha-stats    { grid-template-columns: repeat(2, 1fr); }
+            .grelha-tabelas  { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -265,15 +166,15 @@ $ultimos_docs = $stmt->fetchAll();
     </div>
 
     <nav class="nav-lateral">
-        <a href="index.php"     class="nav-item">
+        <a href="index.php"      class="nav-item">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12M2 8h8M2 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             Chat público
         </a>
-        <a href="admin.php"     class="nav-item ativo">
+        <a href="admin.php"      class="nav-item ativo">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
             Dashboard
         </a>
-        <a href="treinar.php"   class="nav-item">
+        <a href="treinar.php"    class="nav-item">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             Treinar bot
         </a>
@@ -281,17 +182,26 @@ $ultimos_docs = $stmt->fetchAll();
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2h6l4 4v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.5"/><path d="M9 2v4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             Documentos
         </a>
-        <a href="perfil.php"    class="nav-item">
+        <a href="perfil.php"     class="nav-item">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M2 14c0-3.3 2.7-4 6-4s6 .7 6 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             Perfil do criador
         </a>
     </nav>
 
     <div class="rodape-lateral">
-        <div style="margin-bottom:8px;font-size:12px;color:var(--cor-texto-2)">
-            Sessão iniciada às <?= $_SESSION['admin_desde'] ?? '--:--' ?>
+        <!-- Utilizador logado + logout unificado -->
+        <div class="utilizador-lateral">
+            <div class="utilizador-avatar">
+                <?= htmlspecialchars(mb_strtoupper(mb_substr($utilizador['nome'], 0, 1))) ?>
+            </div>
+            <div class="utilizador-info">
+                <div class="utilizador-nome"><?= htmlspecialchars($utilizador['nome']) ?></div>
+                <div class="utilizador-perfil"><?= htmlspecialchars($utilizador['perfil']) ?></div>
+            </div>
         </div>
-        <a href="admin.php?sair=1" style="font-size:12px;color:var(--cor-erro);text-decoration:none;">Terminar sessão</a>
+        <a href="logout.php" style="font-size:12px;color:var(--cor-erro);text-decoration:none;display:block;text-align:center;padding:4px 0;">
+            Terminar sessão
+        </a>
     </div>
 </aside>
 
@@ -391,11 +301,11 @@ $ultimos_docs = $stmt->fetchAll();
                 <?php else: ?>
                 <?php foreach ($ultimos_docs as $d):
                     $classe_badge = match($d['estado']) {
-                        'pronto'       => 'badge-pronto',
-                        'pendente'     => 'badge-pendente',
-                        'erro'         => 'badge-erro',
-                        'a_processar'  => 'badge-processar',
-                        default        => 'badge-pendente',
+                        'pronto'      => 'badge-pronto',
+                        'pendente'    => 'badge-pendente',
+                        'erro'        => 'badge-erro',
+                        'a_processar' => 'badge-processar',
+                        default       => 'badge-pendente',
                     };
                 ?>
                 <tr>
